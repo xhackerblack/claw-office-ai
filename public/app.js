@@ -1,4 +1,4 @@
-// Claw Office AI v3.0 — منطق الواجهة
+// Claw Office AI v3.2 — منطق الواجهة
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 
@@ -39,6 +39,7 @@ function go(id) {
   $$('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.go === id));
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (id === 'screen-client') loadClientScreen();
+  if (id === 'screen-clients') loadClientsPage();
   if (id === 'screen-settings') loadReminders();
 }
 $$('[data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
@@ -139,6 +140,86 @@ async function loadClientScreen() {
     ).join('');
   } catch (e) {}
 }
+
+// ─── صفحة العملاء (بطاقات + تعديل/حذف/إضافة) ───
+let allClients = [];
+function clientCardHTML(c) {
+  const rows = [
+    ['🆔', c.nationalId], ['📞', c.phone], ['✉️', c.email],
+    ['🎂', c.birthDate], ['📍', c.address], ['📅 صالحة إلى', c.expiry]
+  ].filter(([, v]) => v);
+  return `
+  <div class="card client-card">
+    <div class="client-header">
+      <div class="avatar">${esc((c.fullName || c.nationalId || '؟')[0].toUpperCase())}</div>
+      <div style="flex:1;min-width:0">
+        <b>${esc(c.fullName || 'بدون اسم')}</b>
+        <span class="badge ${c.verified ? 'green' : 'orange'}">${c.verified ? '✔ موثّق' : 'غير موثّق'}</span>
+        <small style="color:var(--muted);display:block;margin-top:2px">${esc(c.docType || 'مستند')}</small>
+      </div>
+    </div>
+    ${rows.map(([k, v]) => `<div class="extracted"><span>${k}</span><b class="hl">${esc(v)}</b></div>`).join('')}
+    ${c.notes ? `<div class="client-meta">📝 ${esc(c.notes)}</div>` : ''}
+    <div class="actions">
+      <button class="btn small neon" onclick="editClient('${esc(c.id)}')">✏️ تعديل</button>
+      <button class="btn small" onclick="deleteClient('${esc(c.id)}')">🗑 حذف</button>
+    </div>
+  </div>`;
+}
+function renderClientsGrid() {
+  const q = ($('#client-search').value || '').toLowerCase();
+  const list = allClients.filter(c => !q || JSON.stringify(c).toLowerCase().includes(q));
+  $('#clients-grid').innerHTML = list.map(clientCardHTML).join('') ||
+    '<div class="card center" style="color:var(--muted)">لا عملاء — امسح مستنداً 📷 أو أضف عميلاً يدوياً ➕</div>';
+}
+async function loadClientsPage() {
+  try {
+    allClients = await api('/api/clients');
+    renderClientsGrid();
+  } catch (e) {}
+}
+window.editClient = id => {
+  const c = allClients.find(x => x.id === id);
+  if (!c) return;
+  $('#ce-title').textContent = '✏️ تعديل: ' + (c.fullName || c.nationalId || 'عميل');
+  $('#ce-id').value = c.id;
+  for (const k of ['fullName','nationalId','phone','email','birthDate','address','docType','notes']) $('#ce-' + k).value = c[k] || '';
+  $('#client-edit-card').style.display = 'block';
+  $('#client-edit-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+window.deleteClient = async id => {
+  const c = allClients.find(x => x.id === id);
+  if (!confirm('حذف العميل "' + ((c && (c.fullName || c.nationalId)) || '') + '" نهائياً؟ ستُحذف تذكيراته أيضاً.')) return;
+  const r = await api('/api/clients/' + encodeURIComponent(id), 'DELETE');
+  if (r.ok) { toast('🗑 تم حذف العميل'); loadClientsPage(); loadStats(); loadLogs(); }
+  else toast('❌ فشل الحذف');
+};
+$('#client-add-btn').addEventListener('click', () => {
+  $('#ce-title').textContent = '➕ عميل جديد';
+  $('#ce-id').value = '';
+  for (const k of ['fullName','nationalId','phone','email','birthDate','address','docType','notes']) $('#ce-' + k).value = '';
+  $('#client-edit-card').style.display = 'block';
+  $('#client-edit-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+$('#ce-cancel').addEventListener('click', () => { $('#client-edit-card').style.display = 'none'; });
+$('#ce-save').addEventListener('click', async () => {
+  const id = $('#ce-id').value;
+  const body = {};
+  for (const k of ['fullName','nationalId','phone','email','birthDate','address','docType','notes']) body[k] = $('#ce-' + k).value.trim();
+  if (!body.fullName && !body.nationalId && !body.phone) { toast('⚠️ أدخل الاسم أو رقم التعريف على الأقل'); return; }
+  if (id) {
+    const r = await api('/api/clients/update', 'POST', { id, ...body });
+    if (r.error) { toast('❌ ' + r.error); return; }
+    toast('✅ تم حفظ التعديلات');
+  } else {
+    const r = await api('/api/clients', 'POST', body);
+    if (r.error) { toast('❌ ' + r.error); return; }
+    toast('✅ أُنشئ العميل — 🔔 تذكير تلقائي مفعّل');
+  }
+  $('#client-edit-card').style.display = 'none';
+  loadClientsPage(); loadStats(); loadLogs(); loadActivity();
+});
+$('#client-search').addEventListener('input', renderClientsGrid);
 
 // ─── المهام ───
 async function loadTasks() {
