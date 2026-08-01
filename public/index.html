@@ -11,12 +11,12 @@
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" media="print" onload="this.media='all'">
 <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap"></noscript>
-<link rel="stylesheet" href="styles.css?v=3.2">
+<link rel="stylesheet" href="styles.css?v=3.3">
 </head>
 <body>
 
 <header class="topbar">
-  <div class="topbar-title">🤖 Claw Office AI <span class="badge cyan" id="app-version">v3.2</span></div>
+  <div class="topbar-title">🤖 Claw Office AI <span class="badge cyan" id="app-version">v3.3</span></div>
   <div class="topbar-icons">
     <span class="icon-btn" title="GitHub">⌥</span>
     <span class="icon-btn" title="Cloudflare">☁</span>
@@ -300,13 +300,14 @@
       <input class="field" type="password" id="kimi-key" placeholder="sk-...">
       <label class="flabel">النموذج</label>
       <select class="field" id="kimi-model">
-        <option value="kimi-k2-0711-preview">Kimi K2</option>
-        <option value="moonshot-v1-8k">Moonshot v1 (8k)</option>
+        <option value="moonshot-v1-8k" selected>Moonshot v1 (8k) — مستقر</option>
         <option value="moonshot-v1-32k">Moonshot v1 (32k)</option>
         <option value="moonshot-v1-128k">Moonshot v1 (128k)</option>
+        <option value="kimi-k2-0711-preview">Kimi K2</option>
       </select>
       <button class="btn neon full" id="kimi-test">اختبار الاتصال</button>
       <div id="kimi-status" style="font-size:13px"></div>
+      <p style="color:var(--muted);font-size:11px;font-weight:600;margin-top:8px">عند نجاح الاختبار يصلك تأكيد فوري على بوت تلغرام 🌙 ويمكنك بدء المحادثة بأمر /chat</p>
     </div>
 
     <div class="card">
@@ -360,7 +361,7 @@
   <button class="nav-btn" data-go="screen-more">⋯<span>المزيد</span></button>
 </nav>
 
-<script src="app.js?v=3.2"></script>
+<script src="app.js?v=3.3"></script>
 <script>
 fetch('/api/version').then(r => r.json()).then(v => {
   document.getElementById('app-version').textContent = 'v' + v.version;
