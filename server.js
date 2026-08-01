@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const APP_VERSION = '2.2';
+const APP_VERSION = '2.3';
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_FILE = path.join(__dirname, 'data.json');
@@ -97,16 +97,112 @@ async function kimiChat(apiKey, model, message) {
   return lastErr;
 }
 
-// ─── محرك البوت (ردود تلقائية على تلغرام) ───
+// ═══════════════════════════════════════════════
+// ─── محرك البوت v2.3 (أوامر مخصصة + إصلاح كامل) ───
+// ═══════════════════════════════════════════════
 let botTimer = null;
 let lastUpdateId = 0;
+let botFailCount = 0;
+
+const STATUS_EMOJI = { PROCESSING: '⏳', MISSING_INFO: '⚠️', READY: '✅' };
+const STATUS_TEXT = { PROCESSING: 'قيد المعالجة', MISSING_INFO: 'ينقصه معلومات', READY: 'جاهز' };
+
+// حذف أي Webhook قديم — السبب الأول لعدم استقبال الرسائل (خطأ 409)
+async function botFixWebhook(token) {
+  try {
+    const info = await tgCall(token, 'getWebhookInfo');
+    if (info.ok && info.result.url) {
+      console.log(`🔧 البوت: وُجد Webhook قديم (${info.result.url}) — جارٍ حذفه...`);
+      addLog('WARN', `البوت: حذف Webhook قديم كان يمنع استقبال الرسائل`);
+      await tgCall(token, 'deleteWebhook', { drop_pending_updates: false });
+    } else {
+      await tgCall(token, 'deleteWebhook', { drop_pending_updates: false });
+    }
+    return true;
+  } catch (e) {
+    addLog('ERROR', `البوت: تعذر حذف Webhook — ${e.message}`);
+    return false;
+  }
+}
+
+// معالج الأوامر المخصصة
+function buildCommandReply(cmd, user, chatId) {
+  const uptimeSec = Math.floor((Date.now() - BOOT_TIME) / 1000);
+  const up = uptimeSec > 3600
+    ? `${Math.floor(uptimeSec / 3600)}س ${Math.floor((uptimeSec % 3600) / 60)}د`
+    : uptimeSec > 60 ? `${Math.floor(uptimeSec / 60)}د ${uptimeSec % 60}ث` : `${uptimeSec}ث`;
+
+  switch (cmd) {
+    case '/start':
+      return `🤖 أهلاً بك في Claw Office AI!\n\n✅ تم تسجيلك بنجاح يا ${user.username}\n🆔 معرف الدردشة: ${chatId}\n\n📋 الأوامر المتاحة:\n/help — كل الأوامر\n/id — معلومات حسابك\n/stats — إحصائيات المكتب\n/tasks — قائمة المهام\n/clients — قائمة العملاء\n/users — إحصائيات المستخدمين\n/logs — آخر السجلات\n/ping — فحص سرعة البوت\n/version — إصدار النظام`;
+    case '/help':
+      return `📋 أوامر Claw Office AI:\n\n/start — التسجيل والترحيب\n/help — هذه القائمة\n/id — معرف الدردشة وحالة حسابك\n/stats — إحصائيات عامة\n/tasks — عرض كل المهام وحالاتها\n/clients — عرض العملاء المسجلين\n/users — عدد المستخدمين والمحظورين\n/logs — آخر 5 سجلات من النظام\n/ping — فحص أن البوت يعمل\n/version — إصدار النظام ومدة التشغيل\n\n💡 أرسل أي نص آخر وسأرد عليك بالذكاء الاصطناعي (إذا كان مفتاح Kimi مفعّلاً).`;
+    case '/id':
+      return `👤 معلومات حسابك:\n\n🆔 معرف الدردشة: ${chatId}\n🙍 الاسم: ${user.username}\n📛 الحالة: ${user.blocked ? '🚫 محظور' : '✅ نشط'}`;
+    case '/ping':
+      return `🏓 Pong! البوت يعمل بشكل ممتاز\n⚡ الإصدار: v${APP_VERSION}`;
+    case '/version':
+      return `📦 Claw Office AI v${APP_VERSION}\n⏱ مدة التشغيل: ${up}\n🟢 Node.js: ${process.version}`;
+    case '/stats':
+      return `📊 إحصائيات المكتب:\n\n🧾 العملاء: ${db.clients.length}\n✅ المهام: ${db.tasks.length}\n👥 المستخدمون: ${db.users.length}\n📜 السجلات: ${db.logs.length}\n🤖 دقة الذكاء الاصطناعي: 98.5%`;
+    case '/tasks': {
+      if (!db.tasks.length) return '📭 لا توجد مهام مسجلة حالياً.';
+      const list = db.tasks.slice(0, 10).map((t, i) =>
+        `${i + 1}. ${STATUS_EMOJI[t.status] || '📌'} ${t.title}\n    👤 ${t.client || '—'} | 📅 ${t.due || '—'} | ${STATUS_TEXT[t.status] || t.status}`
+      ).join('\n\n');
+      return `✅ المهام (${db.tasks.length}):\n\n${list}`;
+    }
+    case '/clients': {
+      if (!db.clients.length) return '📭 لا يوجد عملاء مسجلون حالياً.\nأضف عميلاً من التطبيق وسيظهر هنا.';
+      const list = db.clients.slice(0, 10).map((c, i) =>
+        `${i + 1}. 👤 ${c.fullName || 'بدون اسم'}${c.nationalId ? ` — ${c.nationalId}` : ''}`
+      ).join('\n');
+      return `🧾 العملاء (${db.clients.length}):\n\n${list}`;
+    }
+    case '/users': {
+      const blocked = db.users.filter(u => u.blocked).length;
+      return `👥 إحصائيات المستخدمين:\n\n✅ النشطون: ${db.users.length - blocked}\n🚫 المحظورون: ${blocked}\n📊 الإجمالي: ${db.users.length}`;
+    }
+    case '/logs': {
+      const icons = { INFO: 'ℹ️', SUCCESS: '✅', WARN: '⚠️', ERROR: '❌' };
+      const list = db.logs.slice(0, 5).map(l =>
+        `${icons[l.level] || '•'} ${l.text}`
+      ).join('\n');
+      return `📜 آخر السجلات:\n\n${list || 'لا توجد سجلات'}`;
+    }
+    default:
+      return null; // ليس أمراً — نمرّر للذكاء الاصطناعي
+  }
+}
 
 async function botTick() {
   const token = db.settings.telegramBotToken;
   if (!token) return;
   try {
     const r = await tgCall(token, 'getUpdates', { offset: lastUpdateId + 1, limit: 20, timeout: 0 });
-    if (!r.ok) { addLog('ERROR', `البوت: فشل الجلب — ${r.description}`); stopBot(); return; }
+
+    if (!r.ok) {
+      const desc = r.description || 'خطأ غير معروف';
+      if (String(desc).includes('409')) {
+        // تعارض: Webhook أو جلسة polling أخرى — نصلحه ونستمر
+        addLog('WARN', `البوت: تعارض 409 — إصلاح تلقائي (حذف Webhook)`);
+        await botFixWebhook(token);
+        botFailCount = 0;
+        return;
+      }
+      if (r.error_code === 401) {
+        addLog('ERROR', `البوت: رمز غير صالح — تم إيقاف المحرك. أدخل رمزاً صحيحاً من @BotFather`);
+        console.log('❌ البوت: رمز تلغرام غير صالح — توقف المحرك');
+        stopBot();
+        return;
+      }
+      botFailCount++;
+      addLog('ERROR', `البوت: فشل الجلب (${botFailCount}) — ${desc}`);
+      if (botFailCount >= 10) { addLog('ERROR', 'البوت: كثرة الأخطاء — توقف المحرك'); stopBot(); }
+      return;
+    }
+    botFailCount = 0;
+
     for (const u of r.result) {
       lastUpdateId = Math.max(lastUpdateId, u.update_id);
       const msg = u.message;
@@ -121,46 +217,72 @@ async function botTick() {
         user = { id: msg.from.id, username, handle: '@' + username, status: 'ACTIVE', blocked: false, last: 'الآن' };
         db.users.unshift(user);
         addLog('SUCCESS', `مستخدم جديد انضم للبوت: @${username} (${chatId})`);
+        console.log(`👤 مستخدم جديد: @${username} (${chatId})`);
       }
       user.last = 'الآن';
+      user.username = username;
 
       // الحظر التلقائي للمجهولين
       if (user.blocked) { addLog('ERROR', `تم تجاهل رسالة من محظور: @${username}`); continue; }
       addLog('INFO', `رسالة من @${username}: ${text.slice(0, 60)}`);
+      console.log(`📩 @${username}: ${text.slice(0, 60)}`);
 
-      // الردود
-      if (text === '/start') {
-        await tgCall(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `🤖 أهلاً بك في Claw Office AI!\n\n✅ تم تسجيلك بنجاح.\n🆔 معرف الدردشة الخاص بك: ${chatId}\n\nالأوامر المتاحة:\n/id — عرض معرفك\n/help — المساعدة`,
-        });
-        addLog('SUCCESS', `تم الرد على /start من @${username}`);
-      } else if (text === '/id') {
-        await tgCall(token, 'sendMessage', { chat_id: chatId, text: `🆔 معرف الدردشة: ${chatId}` });
-      } else if (text === '/help') {
-        await tgCall(token, 'sendMessage', { chat_id: chatId, text: '📋 أوامر البوت:\n/start — التسجيل\n/id — معرف الدردشة\n/help — هذه القائمة' });
-      } else if (db.settings.kimiApiKey) {
-        // رد ذكي عبر Kimi
-        const ai = await kimiChat(db.settings.kimiApiKey, db.settings.kimiModel, text);
-        const reply = ai.choices?.[0]?.message?.content || 'عذراً، لم أستطع الرد الآن.';
-        await tgCall(token, 'sendMessage', { chat_id: chatId, text: reply });
-        addLog('SUCCESS', `رد ذكي (Kimi) على @${username}`);
-      } else {
-        await tgCall(token, 'sendMessage', { chat_id: chatId, text: '🤖 استلمت رسالتك. (فعّل مفتاح Kimi API من الإعدادات للردود الذكية)' });
+      // استخراج الأمر (يدعم /cmd@BotName)
+      const cmd = text.split(' ')[0].split('@')[0].toLowerCase();
+      let reply = text.startsWith('/') ? buildCommandReply(cmd, user, chatId) : null;
+
+      if (reply === null && text.startsWith('/') && !buildCommandReply(cmd, user, chatId)) {
+        reply = `❓ أمر غير معروف: ${cmd}\nأرسل /help لعرض الأوامر المتاحة.`;
       }
+
+      if (reply === null) {
+        // رد ذكي عبر Kimi أو رسالة افتراضية
+        if (db.settings.kimiApiKey) {
+          const ai = await kimiChat(db.settings.kimiApiKey, db.settings.kimiModel, text);
+          reply = ai.choices?.[0]?.message?.content || 'عذراً، لم أستطع الرد الآن.';
+          addLog('SUCCESS', `رد ذكي (Kimi) على @${username}`);
+        } else {
+          reply = '🤖 استلمت رسالتك. فعّل مفتاح Kimi API من الإعدادات للردود الذكية، أو أرسل /help للأوامر.';
+        }
+      } else {
+        addLog('SUCCESS', `تم الرد على ${cmd} من @${username}`);
+      }
+
+      const sent = await tgCall(token, 'sendMessage', { chat_id: chatId, text: reply });
+      if (sent.ok) console.log(`📤 رد على @${username} ✔`);
+      else addLog('ERROR', `البوت: فشل إرسال الرد — ${sent.description}`);
     }
     saveDB();
-  } catch (e) { addLog('ERROR', `البوت: خطأ شبكة — ${e.message}`); }
+  } catch (e) {
+    addLog('ERROR', `البوت: خطأ شبكة — ${e.message}`);
+    console.log(`🌐 البوت: خطأ شبكة — ${e.message}`);
+  }
 }
 
-function startBot() {
-  if (botTimer) return;
-  botTimer = setInterval(botTick, 3000);
-  addLog('SUCCESS', 'تم تشغيل محرك البوت — يرد تلقائياً على الرسائل');
+async function startBot() {
+  if (botTimer) return { already: true };
+  const token = db.settings.telegramBotToken;
+  if (!token) return { error: 'لا يوجد رمز' };
+  // 1) حذف أي Webhook قديم يمنع استقبال الرسائل
+  await botFixWebhook(token);
+  // 2) التحقق من هوية البوت
+  try {
+    const me = await tgCall(token, 'getMe');
+    if (!me.ok) return { error: me.description || 'رمز غير صالح' };
+    addLog('SUCCESS', `تم تشغيل محرك البوت @${me.result.username} — يرد تلقائياً على الرسائل`);
+    console.log(`🤖 محرك البوت يعمل: @${me.result.username} — أرسل /start في تلغرام`);
+    botTimer = setInterval(botTick, 3000);
+    botTick(); // جلب فوري أول مرة
+    return { ok: true, username: me.result.username };
+  } catch (e) {
+    addLog('ERROR', `البوت: تعذر التشغيل — ${e.message}`);
+    return { error: e.message };
+  }
 }
 function stopBot() {
   if (botTimer) { clearInterval(botTimer); botTimer = null; }
   addLog('WARN', 'تم إيقاف محرك البوت');
+  console.log('⏹ محرك البوت متوقف');
 }
 
 // ─── واجهات API ───
@@ -260,8 +382,9 @@ async function handleAPI(req, res, pathname, body) {
     if (!token) return send({ ok: false, error: 'أدخل رمز البوت أولاً' }, 400);
     if (body.action === 'start') {
       db.settings.telegramBotToken = token; saveDB();
-      startBot();
-      return send({ ok: true, running: true });
+      const r = await startBot();
+      if (r.error) return send({ ok: false, error: r.error }, 400);
+      return send({ ok: true, running: true, username: r.username });
     }
     stopBot();
     return send({ ok: true, running: false });
@@ -296,8 +419,7 @@ let reqCount = 0;
 const server = http.createServer((req, res) => {
   const t0 = Date.now();
   reqCount++;
-  const fullUrl = req.url;
-  const pathname = new URL(fullUrl, `http://${req.headers.host || 'localhost'}`).pathname;
+  const pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname;
 
   res.on('finish', () => {
     const ms = Date.now() - t0;
