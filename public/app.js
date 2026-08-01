@@ -40,16 +40,25 @@ $('#live-learning').addEventListener('change', e =>
 // ─── الدردشة ───
 $('#chat-send').addEventListener('click', sendChat);
 $('#chat-text').addEventListener('keydown', e => e.key === 'Enter' && sendChat());
-function sendChat() {
+async function sendChat() {
   const inp = $('#chat-text');
   if (!inp.value.trim()) return;
   const box = $('#chat-box');
   box.insertAdjacentHTML('beforeend', `<div class="msg me">${inp.value}</div>`);
   const q = inp.value; inp.value = '';
-  setTimeout(() => {
-    box.insertAdjacentHTML('beforeend', `<div class="msg ai">🤖 تم استلام ردك: "${q}". جارٍ تحديث بيانات العميل...</div>`);
-    box.scrollTop = box.scrollHeight;
-  }, 700);
+  box.scrollTop = box.scrollHeight;
+  try {
+    const r = await api('/api/ai/chat', 'POST', { message: q });
+    if (r.ok) {
+      box.insertAdjacentHTML('beforeend', `<div class="msg ai">🌙 ${r.reply}</div>`);
+    } else {
+      box.insertAdjacentHTML('beforeend', `<div class="msg ai">⚠️ ${r.error} — (أدخل مفتاح Kimi API في الإعدادات لتفعيل الردود الذكية)</div>`);
+      loadLogs();
+    }
+  } catch (e) {
+    box.insertAdjacentHTML('beforeend', `<div class="msg ai">⚠️ خطأ في الاتصال بالخادم</div>`);
+  }
+  box.scrollTop = box.scrollHeight;
 }
 $('#upload-doc').addEventListener('click', () => toast('📷 تم فتح الماسح الضوئي... جارٍ المعالجة عبر OCR'));
 
@@ -131,19 +140,73 @@ $('#deep-search').addEventListener('input', e => {
 // ─── التدريب ───
 $('#conf-range').addEventListener('input', e => $('#conf-val').textContent = e.target.value + '%');
 
-// ─── الإعدادات ───
+// ─── الإعدادات + تلغرام + Kimi ───
 async function saveSettings() {
   await api('/api/settings', 'POST', {
     cloudflareAccountId: $('#cf-account').value,
     githubRepo: $('#gh-repo').value, githubBranch: $('#gh-branch').value,
+    telegramBotToken: $('#tg-token').value,
     telegramWebhook: $('#tg-webhook').checked,
+    kimiApiKey: $('#kimi-key').value,
+    kimiModel: $('#kimi-model').value,
   });
 }
+async function loadSettings() {
+  const s = await api('/api/settings');
+  if (s.cloudflareAccountId) $('#cf-account').value = s.cloudflareAccountId;
+  if (s.githubRepo) $('#gh-repo').value = s.githubRepo;
+  if (s.githubBranch) $('#gh-branch').value = s.githubBranch;
+  if (s.telegramBotToken) $('#tg-token').value = s.telegramBotToken;
+  if (s.telegramWebhook) $('#tg-webhook').checked = true;
+  if (s.kimiApiKey) $('#kimi-key').value = s.kimiApiKey;
+  if (s.kimiModel) $('#kimi-model').value = s.kimiModel;
+}
+
+function showStatus(el, ok, msg) {
+  el.innerHTML = `<span class="badge ${ok ? 'green' : 'red'}">${ok ? '✅' : '❌'} ${msg}</span>`;
+}
+
 $('#cf-deploy').addEventListener('click', async () => { await saveSettings(); toast('☁ جارٍ النشر على Cloudflare...'); loadLogs(); });
 $('#gh-sync').addEventListener('click', async () => { await saveSettings(); toast('⌥ تمت المزامنة مع GitHub'); loadLogs(); });
-$('#tg-test').addEventListener('click', () => toast('✈️ اختبار اتصال بوت تلغرام...'));
-$('#groq-test').addEventListener('click', () => toast('🧠 اختبار اتصال Groq API...'));
+
+// تلغرام
+$('#tg-test').addEventListener('click', async () => {
+  await saveSettings();
+  const st = $('#tg-status'); showStatus(st, true, 'جارٍ الاختبار...');
+  const r = await api('/api/telegram/test', 'POST', { token: $('#tg-token').value });
+  showStatus(st, r.ok, r.ok ? `متصل بالبوت @${r.bot.username}` : `خطأ: ${r.error}`);
+  toast(r.ok ? `✈️ متصل بـ @${r.bot.username}` : `❌ ${r.error}`);
+  loadLogs();
+});
+$('#tg-send').addEventListener('click', async () => {
+  const r = await api('/api/telegram/send', 'POST', {
+    token: $('#tg-token').value, chatId: $('#tg-chatid').value, text: $('#tg-msg').value,
+  });
+  toast(r.ok ? '📨 تم إرسال الرسالة' : `❌ ${r.error}`);
+  if (r.ok) $('#tg-msg').value = '';
+  loadLogs();
+});
+$('#tg-updates').addEventListener('click', async () => {
+  await saveSettings();
+  const r = await api('/api/telegram/updates');
+  if (!r.ok) { toast(`❌ ${r.error}`); loadLogs(); return; }
+  $('#tg-messages').innerHTML = r.messages.map(m => `
+    <div class="list-item"><span class="dot cyan"></span>
+      <span><b>@${m.from}</b> (${m.chatId}): ${m.text}<br><small>${m.date}</small></span>
+    </div>`).join('') || '<small style="color:var(--muted)">لا توجد رسائل — أرسل رسالة للبوت أولاً</small>';
+  loadLogs();
+});
+
+// Kimi
+$('#kimi-test').addEventListener('click', async () => {
+  await saveSettings();
+  const st = $('#kimi-status'); showStatus(st, true, 'جارٍ الاختبار...');
+  const r = await api('/api/ai/chat', 'POST', { apiKey: $('#kimi-key').value, model: $('#kimi-model').value, message: 'اختبار اتصال — رد بجملة واحدة قصيرة' });
+  showStatus(st, r.ok, r.ok ? 'متصل — الرد: ' + r.reply.slice(0, 80) : `خطأ: ${r.error}`);
+  toast(r.ok ? '🌙 Kimi API يعمل' : `❌ ${r.error}`);
+  loadLogs();
+});
 
 // ─── تشغيل أولي ───
-loadStats(); loadTasks(); loadUsers(); loadLogs();
-setInterval(loadLogs, 10000);
+loadStats(); loadTasks(); loadUsers(); loadLogs(); loadSettings();
+setInterval(loadLogs, 10000); // تحديث السجلات كل 10 ثوانٍ
