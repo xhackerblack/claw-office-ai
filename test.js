@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ═══ Claw Office AI v3.0 — نظام الاختبار الشامل ═══
+ * ═══ Claw Office AI v3.1 — نظام الاختبار الشامل ═══
  * يفحص: API + الواجهة + أوامر البوت + الأمان + التذكيرات + قاعدة التدريب
  * التشغيل: node test.js
  */
@@ -94,14 +94,14 @@ async function testAPI() {
   console.log('\n━━━ 🌐 فحص واجهات API ━━━');
 
   let r = await req('/api/version');
-  ok('api', '/api/version', r.status === 200 && r.json?.version === '3.0', JSON.stringify(r.json));
+  ok('api', '/api/version', r.status === 200 && r.json?.version === '3.1', JSON.stringify(r.json));
 
   r = await req('/');
   ok('api', 'الصفحة الرئيسية (200)', r.status === 200);
 
-  r = await req('/styles.css?v=3.0');
+  r = await req('/styles.css?v=3.1');
   ok('api', 'الأصول المُرقّمة بكاش immutable', r.status === 200 && /immutable/.test(r.headers.get('cache-control') || ''));
-  r = await req('/app.js?v=3.0');
+  r = await req('/app.js?v=3.1');
   ok('api', 'app.js يُقدَّم (200)', r.status === 200);
 
   r = await req('/api/stats');
@@ -219,7 +219,7 @@ new Function('module', 'exports', 'require', '__dirname', src)(m, m.exports, req
   await t('/help', '', r => txt(r).includes('/auth') && txt(r).includes('/reminders'));
   await t('/id', '', r => txt(r).includes('777'));
   await t('/ping', '', r => txt(r).includes('بونغ'));
-  await t('/version', '', r => txt(r).includes('3.0'));
+  await t('/version', '', r => txt(r).includes('3.1'));
   await t('/stats', '', r => txt(r).includes('تذكيرات'));
   await t('/report', '', r => txt(r).includes('تقرير'));
   await t('/logs', '', r => txt(r).includes('السجلات'));
@@ -299,7 +299,7 @@ async function testSync() {
 // ═══ التشغيل ═══
 (async () => {
   console.log('╔══════════════════════════════════════════════╗');
-  console.log('║  🧪 Claw Office AI v3.0 — الاختبار الشامل    ║');
+  console.log('║  🧪 Claw Office AI v3.1 — الاختبار الشامل    ║');
   console.log('╚══════════════════════════════════════════════╝');
 
   const df = path.join(ROOT, 'data.json');
