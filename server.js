@@ -7,11 +7,13 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
-const APP_VERSION = '2.1';
+const APP_VERSION = '2.2';
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_FILE = path.join(__dirname, 'data.json');
+const BOOT_TIME = Date.now();
 
 // ─── قاعدة بيانات JSON بسيطة ───
 let db = { clients: [], tasks: [], users: [], logs: [], settings: {} };
@@ -288,8 +290,20 @@ async function handleAPI(req, res, pathname, body) {
   return send({ error: 'المسار غير موجود' }, 404);
 }
 
+// ─── عدادات مراقبة الأداء ───
+let reqCount = 0;
+
 const server = http.createServer((req, res) => {
-  const pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname;
+  const t0 = Date.now();
+  reqCount++;
+  const fullUrl = req.url;
+  const pathname = new URL(fullUrl, `http://${req.headers.host || 'localhost'}`).pathname;
+
+  res.on('finish', () => {
+    const ms = Date.now() - t0;
+    const icon = ms > 500 ? '🐢' : '⚡';
+    console.log(`${icon} [${new Date().toLocaleTimeString('ar')}] ${req.method} ${pathname} → ${res.statusCode} (${ms}ms)`);
+  });
 
   if (pathname.startsWith('/api/')) {
     let body = '';
@@ -306,10 +320,16 @@ const server = http.createServer((req, res) => {
   if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end('Forbidden'); }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); return res.end('404 - الصفحة غير موجودة'); }
-    // منع تخزين الملفات القديمة في كاش المتصفح حتى يصل التحديث فوراً
-    const headers = { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' };
-    if (['.html', '.css', '.js'].includes(path.extname(filePath))) {
+    const ext = path.extname(filePath);
+    const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
+    if (ext === '.html') {
+      // الصفحة دائماً جديدة حتى تصل التحديثات فوراً
       headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+    } else if (ext === '.css' || ext === '.js') {
+      // ملفات CSS/JS مرقّمة بإصدار (?v=) — كاش طويل آمن وسريع جداً
+      headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+    } else {
+      headers['Cache-Control'] = 'public, max-age=86400';
     }
     res.writeHead(200, headers);
     res.end(data);
@@ -317,8 +337,37 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log('╔════════════════════════════════════════════╗');
-  console.log(`║   🤖 Claw Office AI v${APP_VERSION} - يعمل الآن   ║`);
-  console.log('╚════════════════════════════════════════════╝');
-  console.log(`🌐 افتح المتصفح على: http://localhost:${PORT}`);
+  const bootMs = Date.now() - BOOT_TIME;
+  const mem = process.memoryUsage();
+  const mb = n => (n / 1024 / 1024).toFixed(1) + ' MB';
+  const dataSize = fs.existsSync(DATA_FILE) ? (fs.statSync(DATA_FILE).size / 1024).toFixed(1) + ' KB' : 'غير موجود';
+
+  console.log('');
+  console.log('╔════════════════════════════════════════════════════╗');
+  console.log(`║   🤖 Claw Office AI v${APP_VERSION} - يعمل الآن           ║`);
+  console.log('╚════════════════════════════════════════════════════╝');
+  console.log('');
+  console.log('📋 معلومات التشغيل:');
+  console.log(`   🌐 الرابط:        http://localhost:${PORT}`);
+  console.log(`   📦 الإصدار:       v${APP_VERSION}`);
+  console.log(`   🟢 Node.js:       ${process.version}`);
+  console.log(`   📱 النظام:        ${os.platform()} / ${os.arch()}`);
+  console.log(`   ⏱ زمن الإقلاع:    ${bootMs}ms`);
+  console.log(`   💾 الذاكرة:       ${mb(mem.rss)} (RSS)`);
+  console.log('');
+  console.log('🗄 قاعدة البيانات:');
+  console.log(`   📄 الملف:         ${DATA_FILE}`);
+  console.log(`   📏 الحجم:         ${dataSize}`);
+  console.log(`   👥 المستخدمون:    ${db.users.length}`);
+  console.log(`   ✅ المهام:        ${db.tasks.length}`);
+  console.log(`   🧾 العملاء:       ${db.clients.length}`);
+  console.log(`   📜 السجلات:       ${db.logs.length}`);
+  console.log('');
+  console.log('⚙️ الإعدادات المحفوظة:');
+  console.log(`   ✈️ بوت تلغرام:    ${db.settings.telegramBotToken ? '✔ رمز محفوظ' : '✖ غير مضبوط'}`);
+  console.log(`   🌙 مفتاح Kimi:    ${db.settings.kimiApiKey ? '✔ محفوظ' : '✖ غير مضبوط'}`);
+  console.log('');
+  console.log('─────────────────────────────────────────────────────');
+  console.log('📡 سجل الطلبات المباشر (⚡ سريع | 🐢 بطيء +500ms):');
+  console.log('─────────────────────────────────────────────────────');
 });
