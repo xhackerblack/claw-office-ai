@@ -3,11 +3,11 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DB_FILE = path.join(ROOT, 'data.json');
-const APP_VERSION = '3.0';
+const APP_VERSION = '3.1';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ─── DB ───
@@ -578,7 +578,12 @@ async function handleAPI(req, res, url) {
     const b = await readBody(req);
     if (!db.settings.kimiApiKey) return json({ error: 'لم يتم ضبط مفتاح Kimi API. أضفه من الإعدادات ⚙️' }, 400);
     try { const r = await kimiChat(db.settings.kimiApiKey, db.settings.kimiModel || 'kimi-k2.5', b.message); return json(r); }
-    catch (e) { return json({ error: 'خطأ Kimi: ' + e.message }, 500); }
+    catch (e) {
+      let msg = e.message;
+      if (/auth|401|invalid/i.test(msg)) msg = 'مفتاح Kimi غير صالح أو ملغى (Invalid Authentication).\nالحل: افتح platform.moonshot.cn (أو platform.moonshot.ai) ← API Keys ← أنشئ مفتاحاً جديداً ← الصقه في الإعدادات ⚙️ واحفظ.';
+      addLog('error', 'Kimi: فشل الطلب — ' + msg.split('\n')[0]);
+      return json({ error: 'خطأ Kimi: ' + msg }, 500);
+    }
   }
   if (req.method === 'POST' && p === '/api/tasks') {
     const b = await readBody(req);
@@ -634,7 +639,7 @@ const server = http.createServer(async (req, res) => {
   res.on('finish', () => {
     const ms = Date.now() - t0;
     const skip = url.pathname.startsWith('/api/logs');
-    if (!skip || ms > 1000) console.log(`${ms > 1000 ? '🐢' : '⚡'} ${req.method} ${url.pathname} → ${res.statusCode} (${ms}ms)`);
+    if (!skip || ms > 1000) console.log(`${ms > 1000 ? 'SLOW' : ' ok '} ${req.method} ${url.pathname} -> ${res.statusCode} (${ms}ms)`);
   });
   try {
     if (url.pathname.startsWith('/api/')) return await handleAPI(req, res, url);
@@ -655,17 +660,28 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  const sep = '═'.repeat(40);
-  console.log('\n╔' + sep + '╗');
-  console.log('║   🚀 Claw Office AI v' + APP_VERSION + ' — يعمل الآن      ║');
-  console.log('╚' + sep + '╝');
-  console.log('🌐 الرابط:        http://localhost:' + PORT);
-  console.log('🔑 مفتاح Kimi:    ' + (db.settings.kimiApiKey ? '✅ مضبوط' : '❌ غير مضبوط (الإعدادات)'));
-  console.log('🤖 بوت تلغرام:    ' + (db.settings.telegramBotToken ? '⏳ جارٍ الاتصال...' : '❌ غير مضبوط (الإعدادات)'));
-  console.log('🔐 رمز أمان البوت: ' + db.settings.accessToken);
-  console.log('🔔 مدة التذكير:    ' + db.settings.reminderHours + ' ساعة');
-  console.log('💾 قاعدة البيانات: ' + db.clients.length + ' عميل، ' + db.tasks.length + ' مهمة');
-  console.log(sep);
-  console.log('📡 سجل الطلبات المباشر (آخر ' + REQ_LOG_LIMIT + '):');
+  // سطر البدء بالإنجليزية فقط — العربية تتشوه في طرفية Termux
+  const L = '+------------------------------------------------+';
+  console.log('');
+  console.log(L);
+  console.log('|   Claw Office AI v' + APP_VERSION + '  -  SERVER IS RUNNING   |');
+  console.log(L);
+  console.log('  APP LINK .......  http://localhost:' + PORT);
+  console.log('  VERSION ........  v' + APP_VERSION);
+  console.log('  NODE ...........  ' + process.version);
+  console.log('');
+  console.log('  KIMI KEY .......  ' + (db.settings.kimiApiKey ? '[ OK ] saved' : '[ !! ] missing -> Settings'));
+  console.log('  TELEGRAM BOT ...  ' + (db.settings.telegramBotToken ? '[ OK ] connecting...' : '[ !! ] missing -> Settings'));
+  console.log('  BOT ACCESS CODE   ' + db.settings.accessToken + '   <-- copy it');
+  console.log('  REMINDER TIME ..  ' + db.settings.reminderHours + ' hours');
+  console.log('');
+  console.log('  DATABASE .......  ' + db.clients.length + ' clients, ' + db.tasks.length + ' tasks');
+  console.log(L);
+  console.log('  HOW TO ACTIVATE THE BOT:');
+  console.log('  1) Open Telegram and send this to your bot:');
+  console.log('       /auth ' + db.settings.accessToken);
+  console.log('  2) Then send any document photo -> auto client file');
+  console.log(L);
+  console.log('  LIVE REQUEST LOG (ok = fast, SLOW > 1000ms):');
   startBot();
 });
