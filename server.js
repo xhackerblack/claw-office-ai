@@ -55,8 +55,34 @@ function addLog(level, text) {
   saveDB();
 }
 
+// ─── مساعدات الاتصال الخارجي ───
+async function tgCall(token, method, payload = {}) {
+  const r = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return r.json();
+}
+
+async function kimiChat(apiKey, model, message) {
+  const r = await fetch('https://api.moonshot.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: model || 'kimi-k2-0711-preview',
+      messages: [
+        { role: 'system', content: 'أنت مدير الذكاء الاصطناعي في تطبيق Claw Office AI لإدارة المكاتب. أجب بالعربية باختصار واحترافية.' },
+        { role: 'user', content: message },
+      ],
+      temperature: 0.6,
+    }),
+  });
+  return r.json();
+}
+
 // ─── واجهات API ───
-function handleAPI(req, res, pathname, body) {
+async function handleAPI(req, res, pathname, body) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   const send = (obj, code = 200) => { res.writeHead(code); res.end(JSON.stringify(obj)); };
 
@@ -104,6 +130,64 @@ function handleAPI(req, res, pathname, body) {
     });
     return send(results);
   }
+  // ─── تلغرام ───
+  if (req.method === 'POST' && pathname === '/api/telegram/test') {
+    const token = body.token || db.settings.telegramBotToken;
+    if (!token) { addLog('WARN', 'تلغرام: لم يتم إدخال رمز البوت'); return send({ ok: false, error: 'أدخل رمز البوت أولاً' }, 400); }
+    try {
+      const r = await tgCall(token, 'getMe');
+      if (r.ok) { addLog('SUCCESS', `تلغرام: تم الاتصال بالبوت @${r.result.username}`); return send({ ok: true, bot: r.result }); }
+      addLog('ERROR', `تلغرام: فشل الاتصال — ${r.description}`);
+      return send({ ok: false, error: r.description }, 401);
+    } catch (e) { addLog('ERROR', `تلغرام: خطأ شبكة — ${e.message}`); return send({ ok: false, error: e.message }, 500); }
+  }
+  if (req.method === 'POST' && pathname === '/api/telegram/send') {
+    const token = body.token || db.settings.telegramBotToken;
+    if (!token || !body.chatId || !body.text) return send({ ok: false, error: 'الرمز ومعرف الدردشة والنص مطلوبة' }, 400);
+    try {
+      const r = await tgCall(token, 'sendMessage', { chat_id: body.chatId, text: body.text });
+      if (r.ok) { addLog('SUCCESS', `تلغرام: تم إرسال رسالة إلى ${body.chatId}`); return send({ ok: true, result: r.result }); }
+      addLog('ERROR', `تلغرام: فشل الإرسال — ${r.description}`);
+      return send({ ok: false, error: r.description }, 400);
+    } catch (e) { addLog('ERROR', `تلغرام: خطأ شبكة — ${e.message}`); return send({ ok: false, error: e.message }, 500); }
+  }
+  if (req.method === 'GET' && pathname === '/api/telegram/updates') {
+    const token = db.settings.telegramBotToken;
+    if (!token) { addLog('WARN', 'تلغرام: احفظ رمز البوت في الإعدادات أولاً'); return send({ ok: false, error: 'احفظ رمز البوت أولاً (زر اختبار الاتصال يحفظه)' }, 400); }
+    try {
+      const r = await tgCall(token, 'getUpdates', { limit: 10 });
+      if (r.ok) {
+        const msgs = r.result.map(u => ({
+          from: u.message?.from?.username || u.message?.from?.first_name || 'مجهول',
+          chatId: u.message?.chat?.id,
+          text: u.message?.text || '(غير نصية)',
+          date: u.message?.date ? new Date(u.message.date * 1000).toLocaleString('ar') : '',
+        })).reverse();
+        addLog('INFO', `تلغرام: تم جلب ${msgs.length} رسالة`);
+        return send({ ok: true, messages: msgs });
+      }
+      addLog('ERROR', `تلغرام: فشل جلب الرسائل — ${r.description}`);
+      return send({ ok: false, error: r.description }, 400);
+    } catch (e) { addLog('ERROR', `تلغرام: خطأ شبكة — ${e.message}`); return send({ ok: false, error: e.message }, 500); }
+  }
+
+  // ─── Kimi AI ───
+  if (req.method === 'POST' && pathname === '/api/ai/chat') {
+    const key = body.apiKey || db.settings.kimiApiKey;
+    if (!key) { addLog('WARN', 'Kimi: لم يتم إدخال مفتاح API'); return send({ ok: false, error: 'أدخل مفتاح Kimi API في الإعدادات' }, 400); }
+    try {
+      const r = await kimiChat(key, body.model || db.settings.kimiModel, body.message || 'اختبار الاتصال — رد بجملة واحدة');
+      if (r.choices && r.choices[0]) {
+        const reply = r.choices[0].message.content;
+        addLog('SUCCESS', 'Kimi: تم توليد رد بنجاح');
+        return send({ ok: true, reply });
+      }
+      const errMsg = r.error?.message || JSON.stringify(r);
+      addLog('ERROR', `Kimi: فشل الطلب — ${errMsg}`);
+      return send({ ok: false, error: errMsg }, 401);
+    } catch (e) { addLog('ERROR', `Kimi: خطأ شبكة — ${e.message}`); return send({ ok: false, error: e.message }, 500); }
+  }
+
   return send({ error: 'المسار غير موجود' }, 404);
 }
 
