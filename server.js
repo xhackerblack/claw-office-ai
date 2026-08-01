@@ -8,6 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
+const APP_VERSION = '2.1';
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_FILE = path.join(__dirname, 'data.json');
@@ -165,6 +166,9 @@ async function handleAPI(req, res, pathname, body) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   const send = (obj, code = 200) => { res.writeHead(code); res.end(JSON.stringify(obj)); };
 
+  if (req.method === 'GET' && pathname === '/api/version') {
+    return send({ version: APP_VERSION, name: 'Claw Office AI' });
+  }
   if (req.method === 'GET' && pathname === '/api/stats') {
     return send({
       learning: 85, knowledge: '1.2 تيرابايت', aiAccuracy: 98.5,
@@ -302,14 +306,19 @@ const server = http.createServer((req, res) => {
   if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end('Forbidden'); }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); return res.end('404 - الصفحة غير موجودة'); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });
+    // منع تخزين الملفات القديمة في كاش المتصفح حتى يصل التحديث فوراً
+    const headers = { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' };
+    if (['.html', '.css', '.js'].includes(path.extname(filePath))) {
+      headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+    }
+    res.writeHead(200, headers);
     res.end(data);
   });
 });
 
 server.listen(PORT, () => {
   console.log('╔════════════════════════════════════════════╗');
-  console.log('║        🤖 Claw Office AI - يعمل الآن       ║');
+  console.log(`║   🤖 Claw Office AI v${APP_VERSION} - يعمل الآن   ║`);
   console.log('╚════════════════════════════════════════════╝');
   console.log(`🌐 افتح المتصفح على: http://localhost:${PORT}`);
 });
