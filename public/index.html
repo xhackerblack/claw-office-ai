@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0D1117">
+<title>Claw Office AI - لوحة التحكم</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-title">🤖 لوحة تحكم Claw Office AI</div>
+  <div class="topbar-icons">
+    <span class="icon-btn" title="GitHub">⌥</span>
+    <span class="icon-btn" title="Cloudflare">☁</span>
+  </div>
+</header>
+
+<main id="app">
+
+  <!-- الوحدة 1: لوحة التحكم -->
+  <section id="screen-dashboard" class="screen active">
+    <div class="cards-grid">
+      <div class="card center">
+        <div class="ring" id="learning-ring"><span id="learning-pct">85%</span></div>
+        <div class="card-label">تقدم التعلم</div>
+      </div>
+      <div class="card center">
+        <div class="big-icon">🗄️</div>
+        <div class="stat-value">1.2 <small>تيرابايت</small></div>
+        <div class="card-label">قاعدة المعرفة <span class="badge green">ينمو</span></div>
+      </div>
+    </div>
+
+    <div class="card toggle-row">
+      <span>⚡ التعلم المباشر</span>
+      <label class="switch"><input type="checkbox" id="live-learning" checked><span class="slider"></span></label>
+    </div>
+
+    <h3 class="section-title">إجراءات سريعة</h3>
+    <div class="quick-actions">
+      <button class="qa-btn neon" data-go="screen-documents">📷<span>مسح مستند</span></button>
+      <button class="qa-btn" data-go="screen-training">🧠<span>تدريب الوكيل</span></button>
+      <button class="qa-btn" data-go="screen-settings">✈️<span>بوت تلغرام</span></button>
+    </div>
+
+    <h3 class="section-title">النشاطات الأخيرة</h3>
+    <div class="card list" id="recent-activity">
+      <div class="list-item"><span class="dot green"></span> تمت إضافة عميل من صورة (Alex K.) <small>منذ 10 دقائق</small></div>
+      <div class="list-item"><span class="dot yellow"></span> تذكير: ملف معلق #123 <small>منذ 45 دقيقة</small></div>
+      <div class="list-item"><span class="dot cyan"></span> تمت معالجة استعلام تلغرام <small>منذ ساعة</small></div>
+    </div>
+  </section>
+
+  <!-- الوحدة 2: معالجة المستندات -->
+  <section id="screen-documents" class="screen">
+    <div class="card center scanner">
+      <div class="scan-ring"></div>
+      <div class="scan-id">🪪</div>
+    </div>
+    <div class="card">
+      <h4>البيانات المستخرجة</h4>
+      <div class="extracted"><span>الاسم:</span><b class="hl">أحمد العلوي</b></div>
+      <div class="extracted"><span>رقم الهوية:</span><b class="hl">AB123456</b></div>
+      <div class="extracted"><span>تاريخ الميلاد:</span><b class="hl">01/01/1990</b></div>
+    </div>
+    <button class="btn neon full" id="upload-doc">⬆ رفع مستند جديد</button>
+
+    <div class="card chat">
+      <h4>مدير الذكاء الاصطناعي</h4>
+      <div id="chat-box">
+        <div class="msg ai">🤖 هل يمكنك تأكيد الرقم الأخير في بطاقة الهوية؟</div>
+      </div>
+      <div class="chat-input">
+        <input type="text" id="chat-text" placeholder="اكتب ردك...">
+        <button class="btn neon" id="chat-send">إرسال</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- الوحدة 3: المهام -->
+  <section id="screen-tasks" class="screen">
+    <h3 class="section-title">المهام والتذكيرات</h3>
+    <div class="timeline" id="tasks-list"></div>
+    <div class="card suggestions">
+      <h4>💡 اقتراحات ذكية</h4>
+      <div class="list-item">أكمل معلومات العميل ب <button class="btn small">تنفيذ</button></div>
+      <div class="list-item">أرسل تذكيراً لملف #123 <button class="btn small">تذكير</button></div>
+    </div>
+  </section>
+
+  <!-- الوحدتان 4+5: السجلات -->
+  <section id="screen-logs" class="screen">
+    <div class="cards-grid">
+      <div class="card center"><div class="stat-value" id="msg-today">1,245</div><div class="card-label">رسائل اليوم</div></div>
+      <div class="card center"><div class="stat-value" id="active-users">328</div><div class="card-label">المستخدمون النشطون</div></div>
+    </div>
+    <div class="tabs" id="log-filters">
+      <button class="tab active" data-f="all">كل السجلات</button>
+      <button class="tab" data-f="ERROR">الأخطاء فقط</button>
+      <button class="tab" data-f="OCR">عمليات OCR</button>
+      <button class="tab" data-f="INFO">النظام</button>
+    </div>
+    <div class="card logs" id="logs-list"></div>
+  </section>
+
+  <!-- الوحدة 6: المستخدمون والأمان -->
+  <section id="screen-users" class="screen">
+    <div class="card toggle-row">
+      <span>🛡 حظر المستخدمين المجهولين تلقائياً</span>
+      <label class="switch"><input type="checkbox" checked><span class="slider"></span></label>
+    </div>
+    <input class="search-bar" id="user-search" placeholder="🔍 ابحث عن مستخدم...">
+    <div id="users-list"></div>
+  </section>
+
+  <!-- الوحدة 8: البحث العميق -->
+  <section id="screen-search" class="screen">
+    <input class="search-bar neon-border" id="deep-search" placeholder="ابحث عن أي شيء... (أرقام هويات، أسماء، نصوص)">
+    <div class="chips">
+      <span class="chip">صور</span><span class="chip">PDFs</span><span class="chip">معلومات العملاء</span><span class="chip">تذكيرات</span>
+    </div>
+    <div class="card toggle-row">
+      <span>البحث الدلالي</span>
+      <label class="switch"><input type="checkbox" checked><span class="slider"></span></label>
+    </div>
+    <div id="search-results"></div>
+  </section>
+
+  <!-- الوحدة 9: رؤى الأداء -->
+  <section id="screen-reports" class="screen">
+    <div class="card center">
+      <div class="gauge">98.5%</div>
+      <div class="card-label">معدل دقة الذكاء الاصطناعي</div>
+    </div>
+    <div class="card">
+      <h4>معدل نجاح OCR</h4>
+      <div class="bar-row"><span>بطاقات الهوية</span><div class="bar"><div class="fill" style="width:99.2%"></div></div><b>99.2%</b></div>
+      <div class="bar-row"><span>الإيصالات</span><div class="bar"><div class="fill" style="width:95.8%"></div></div><b>95.8%</b></div>
+      <div class="bar-row"><span>الاستمارات</span><div class="bar"><div class="fill" style="width:97.1%"></div></div><b>97.1%</b></div>
+    </div>
+    <div class="card">
+      <h4>المستندات المعالجة (أسبوعي)</h4>
+      <div class="chart" id="bar-chart"></div>
+    </div>
+    <button class="btn neon full">⬇ تحميل التقرير</button>
+  </section>
+
+  <!-- الوحدة 10: التدريب -->
+  <section id="screen-training" class="screen">
+    <input class="search-bar" placeholder="🔍 البحث في القوالب...">
+    <div class="templates">
+      <div class="card tpl"><div class="big-icon">🪪</div><b>البطاقة الوطنية</b><div class="bar"><div class="fill" style="width:85%"></div></div><small>85% مكتمل</small></div>
+      <div class="card tpl"><div class="big-icon">🛂</div><b>جواز السفر</b><div class="bar"><div class="fill" style="width:92%"></div></div><small>92% مكتمل</small></div>
+      <div class="card tpl"><div class="big-icon">🧾</div><b>فاتورة الخدمات</b><div class="bar"><div class="fill" style="width:60%"></div></div><small>60% مكتمل</small></div>
+    </div>
+    <button class="btn neon full">➕ إضافة قالب جديد</button>
+    <div class="card">
+      <h4>مستوى الثقة</h4>
+      <input type="range" min="0" max="100" value="75" class="range" id="conf-range">
+      <div class="center"><b id="conf-val">75%</b></div>
+      <button class="btn full">🧪 اختبار الاستخراج</button>
+    </div>
+  </section>
+
+  <!-- الوحدتان 4+11: الإعدادات -->
+  <section id="screen-settings" class="screen">
+    <div class="card">
+      <h4>☁ Cloudflare Workers</h4>
+      <input class="field" id="cf-account" placeholder="معرف الحساب">
+      <input class="field" type="password" id="cf-token" placeholder="رمز API">
+      <button class="btn neon" id="cf-deploy">نشر</button>
+    </div>
+    <div class="card">
+      <h4>⌥ تكامل GitHub</h4>
+      <input class="field" id="gh-repo" placeholder="اسم المستودع">
+      <input class="field" id="gh-branch" placeholder="الفرع" value="main">
+      <button class="btn neon" id="gh-sync">مزامنة الآن</button>
+    </div>
+    <div class="card">
+      <h4>✈️ Telegram Bot API</h4>
+      <input class="field" type="password" id="tg-token" placeholder="رمز البوت">
+      <div class="toggle-row"><span>وضع Webhook</span>
+        <label class="switch"><input type="checkbox" id="tg-webhook"><span class="slider"></span></label></div>
+      <button class="btn neon" id="tg-test">اختبار الاتصال</button>
+    </div>
+    <div class="card">
+      <h4>🧠 Groq / مزود الذكاء الاصطناعي</h4>
+      <input class="field" type="password" id="groq-key" placeholder="مفتاح API">
+      <button class="btn neon" id="groq-test">اختبار الاتصال</button>
+    </div>
+    <div class="card">
+      <h4>🔔 الإشعارات والتنبيهات</h4>
+      <div class="toggle-row"><span>تفعيل التنبيهات</span>
+        <label class="switch"><input type="checkbox" checked><span class="slider"></span></label></div>
+      <div class="list-item"><span class="dot red"></span> وصول غير مصرح به → صفارة إنذار → حرج</div>
+      <div class="list-item"><span class="dot cyan"></span> عميل جديد → رنين → عادي</div>
+      <div class="list-item"><span class="dot yellow"></span> مهمة متأخرة → نقطة → عالٍ</div>
+    </div>
+    <div class="card logs small" id="status-logs"></div>
+  </section>
+
+</main>
+
+<nav class="bottom-nav">
+  <button class="nav-btn active" data-go="screen-dashboard">🏠<span>الرئيسية</span></button>
+  <button class="nav-btn" data-go="screen-documents">📷<span>المستندات</span></button>
+  <button class="nav-btn" data-go="screen-tasks">✅<span>المهام</span></button>
+  <button class="nav-btn" data-go="screen-logs">📊<span>السجلات</span></button>
+  <button class="nav-btn" data-go="screen-users">🛡<span>المستخدمون</span></button>
+  <button class="nav-btn" data-go="screen-search">🔍<span>البحث</span></button>
+  <button class="nav-btn" data-go="screen-reports">📈<span>التقارير</span></button>
+  <button class="nav-btn" data-go="screen-training">🧠<span>التدريب</span></button>
+  <button class="nav-btn" data-go="screen-settings">⚙️<span>الإعدادات</span></button>
+</nav>
+
+<script src="app.js"></script>
+</body>
+</html>
