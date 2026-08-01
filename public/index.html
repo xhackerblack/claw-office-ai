@@ -11,12 +11,12 @@
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" media="print" onload="this.media='all'">
 <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap"></noscript>
-<link rel="stylesheet" href="styles.css?v=3.1">
+<link rel="stylesheet" href="styles.css?v=3.2">
 </head>
 <body>
 
 <header class="topbar">
-  <div class="topbar-title">🤖 Claw Office AI <span class="badge cyan" id="app-version">v3.1</span></div>
+  <div class="topbar-title">🤖 Claw Office AI <span class="badge cyan" id="app-version">v3.2</span></div>
   <div class="topbar-icons">
     <span class="icon-btn" title="GitHub">⌥</span>
     <span class="icon-btn" title="Cloudflare">☁</span>
@@ -44,7 +44,7 @@
     <h3 class="section-title">إجراءات سريعة</h3>
     <div class="quick-actions">
       <button class="qa-btn" data-go="screen-documents">📷<span>مسح مستند (OCR)</span></button>
-      <button class="qa-btn" data-go="screen-training">🧠<span>تدريب الوكيل</span></button>
+      <button class="qa-btn" data-go="screen-clients">🧾<span>العملاء</span></button>
       <button class="qa-btn" data-go="screen-settings">✈️<span>إعدادات البوت</span></button>
     </div>
 
@@ -55,6 +55,41 @@
 
     <h3 class="section-title">النشاطات الأخيرة</h3>
     <div class="card" id="recent-activity"></div>
+  </section>
+
+  <section id="screen-clients" class="screen">
+    <div class="toggle-row" style="margin-bottom:12px">
+      <h3 class="section-title" style="margin:0">🧾 كل العملاء</h3>
+      <button class="btn neon small" id="client-add-btn">➕ عميل جديد</button>
+    </div>
+    <input class="search-bar" id="client-search" placeholder="🔍 ابحث بالاسم أو رقم التعريف أو الهاتف...">
+
+    <div class="card" id="client-edit-card" style="display:none;border-color:var(--neon)">
+      <h4 id="ce-title">✏️ تعديل عميل</h4>
+      <input type="hidden" id="ce-id">
+      <label class="flabel">الاسم الكامل</label>
+      <input class="field" id="ce-fullName" placeholder="الاسم الكامل">
+      <label class="flabel">رقم التعريف</label>
+      <input class="field" id="ce-nationalId" placeholder="مثال: CD220673">
+      <label class="flabel">الهاتف</label>
+      <input class="field" id="ce-phone" placeholder="06...">
+      <label class="flabel">البريد الإلكتروني</label>
+      <input class="field" id="ce-email" placeholder="email@example.com">
+      <label class="flabel">تاريخ الميلاد</label>
+      <input class="field" id="ce-birthDate" placeholder="يوم.شهر.سنة">
+      <label class="flabel">العنوان</label>
+      <input class="field" id="ce-address" placeholder="العنوان">
+      <label class="flabel">نوع المستند</label>
+      <input class="field" id="ce-docType" placeholder="بطاقة التعريف الوطنية...">
+      <label class="flabel">ملاحظات</label>
+      <input class="field" id="ce-notes" placeholder="ملاحظات إضافية">
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn green" id="ce-save" style="flex:1">💾 حفظ</button>
+        <button class="btn" id="ce-cancel" style="flex:1">إلغاء</button>
+      </div>
+    </div>
+
+    <div id="clients-grid"></div>
   </section>
 
   <section id="screen-documents" class="screen">
@@ -304,8 +339,10 @@
   <section id="screen-more" class="screen">
     <h3 class="section-title">كل الوحدات</h3>
     <div class="more-grid">
+      <button class="more-btn" data-go="screen-clients">🧾<span>العملاء</span></button>
       <button class="more-btn" data-go="screen-client">👤<span>ملف العميل</span></button>
       <button class="more-btn" data-go="screen-users">🛡<span>المستخدمون</span></button>
+      <button class="more-btn" data-go="screen-logs">📊<span>السجلات</span></button>
       <button class="more-btn" data-go="screen-search">🔍<span>البحث العميق</span></button>
       <button class="more-btn" data-go="screen-reports">📈<span>رؤى الأداء</span></button>
       <button class="more-btn" data-go="screen-training">🧠<span>التدريب</span></button>
@@ -318,12 +355,12 @@
 <nav class="bottom-nav">
   <button class="nav-btn active" data-go="screen-dashboard">🏠<span>الرئيسية</span></button>
   <button class="nav-btn" data-go="screen-tasks">✅<span>المهام</span></button>
-  <button class="nav-btn" data-go="screen-logs">📊<span>السجلات</span></button>
+  <button class="nav-btn" data-go="screen-clients">🧾<span>العملاء</span></button>
   <button class="nav-btn" data-go="screen-settings">⚙️<span>الإعدادات</span></button>
   <button class="nav-btn" data-go="screen-more">⋯<span>المزيد</span></button>
 </nav>
 
-<script src="app.js?v=3.1"></script>
+<script src="app.js?v=3.2"></script>
 <script>
 fetch('/api/version').then(r => r.json()).then(v => {
   document.getElementById('app-version').textContent = 'v' + v.version;
