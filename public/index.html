@@ -6,18 +6,17 @@
 <meta name="theme-color" content="#070B12">
 <title>Claw Office AI — لوحة التحكم</title>
 <link rel="manifest" href="manifest.webmanifest">
-<!-- تحميل الخط بالتوازي دون حجب عرض الصفحة (تسريع الفتح) -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" media="print" onload="this.media='all'">
 <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap"></noscript>
-<link rel="stylesheet" href="styles.css?v=2.4">
+<link rel="stylesheet" href="styles.css?v=3.0">
 </head>
 <body>
 
 <header class="topbar">
-  <div class="topbar-title">🤖 Claw Office AI <span class="badge cyan" id="app-version">v2.4</span></div>
+  <div class="topbar-title">🤖 Claw Office AI <span class="badge cyan" id="app-version">v3.0</span></div>
   <div class="topbar-icons">
     <span class="icon-btn" title="GitHub">⌥</span>
     <span class="icon-btn" title="Cloudflare">☁</span>
@@ -26,7 +25,6 @@
 
 <main id="app">
 
-  <!-- ═══ 1: لوحة التحكم ═══ -->
   <section id="screen-dashboard" class="screen active">
     <div class="card">
       <h4 style="justify-content:center;font-size:17px">حالة وكيل الذكاء الاصطناعي</h4>
@@ -38,8 +36,7 @@
         <div class="center">
           <div class="card-label">قاعدة المعرفة</div>
           <div class="big-icon" style="margin:14px 0 4px">🗄️</div>
-          <div class="stat-value" style="font-size:18px">1.2 <small>تيرابايت</small></div>
-          <span class="badge green">ينمو</span>
+          <div class="stat-value" style="font-size:18px" id="kb-size">—</div>
         </div>
       </div>
     </div>
@@ -57,14 +54,9 @@
     </div>
 
     <h3 class="section-title">النشاطات الأخيرة</h3>
-    <div class="card" id="recent-activity">
-      <div class="list-item"><span class="dot green"></span><span class="grow">تمت إضافة عميل من صورة (أحمد ك.)</span><small>منذ 10 دقائق</small></div>
-      <div class="list-item"><span class="dot yellow"></span><span class="grow">تذكير: ملف معلق #123</span><small>منذ 45 دقيقة</small></div>
-      <div class="list-item"><span class="dot cyan"></span><span class="grow">تمت معالجة استعلام تلغرام</span><small>منذ ساعة</small></div>
-    </div>
+    <div class="card" id="recent-activity"></div>
   </section>
 
-  <!-- ═══ 2: معالجة المستندات ═══ -->
   <section id="screen-documents" class="screen">
     <h3 class="section-title">معالجة المستندات بالذكاء الاصطناعي</h3>
     <div class="card center scanner">
@@ -73,11 +65,10 @@
     </div>
     <div class="card">
       <h4>📄 البيانات المستخرجة</h4>
-      <div class="extracted"><span>الاسم الكامل</span><b class="hl">أحمد العلوي</b></div>
-      <div class="extracted"><span>رقم الهوية</span><b class="hl">AB123456</b></div>
-      <div class="extracted"><span>تاريخ الميلاد</span><b class="hl">01/01/1990</b></div>
+      <div id="extracted-data"><p style="color:var(--muted);font-size:13px;font-weight:600">لم يُمسح أي مستند بعد — ارفع صورة أو أرسلها للبوت 📷</p></div>
     </div>
-    <button class="btn neon full" id="upload-doc">⬆ رفع مستند جديد</button>
+    <input type="file" id="doc-file" accept="image/*" style="display:none">
+    <button class="btn neon full" id="upload-doc">📷 مسح مستند بالذكاء الاصطناعي</button>
 
     <div class="card">
       <h4>💬 محادثة مع مدير الذكاء الاصطناعي</h4>
@@ -97,25 +88,15 @@
     </div>
   </section>
 
-  <!-- ═══ 3: المهام ═══ -->
   <section id="screen-tasks" class="screen">
     <h3 class="section-title">الملفات المعلقة والمواعيد القادمة</h3>
     <div class="timeline" id="tasks-list"></div>
-    <div class="ai-suggest">
-      <div class="ai-chip">🤖</div>
-      <h4 style="justify-content:center;color:var(--neon)">اقتراحات ذكية</h4>
-      <p>العميل "ب" لم يحدّث بيانات هويته. هل تريد إرسال إشعار عبر تلغرام؟</p>
-      <button class="btn neon full" id="suggest-tg">إرسال عبر تلغرام</button>
-      <p>موعد التسليم يقترب للمشروع "ج". هل تعيد تعيينه للفريق؟</p>
-      <button class="btn full">مراجعة</button>
-    </div>
   </section>
 
-  <!-- ═══ 5: السجلات ═══ -->
   <section id="screen-logs" class="screen">
     <div class="cards-grid">
-      <div class="stat-card"><div class="stat-label">إجمالي رسائل اليوم</div><div class="stat-num" id="msg-today">1,245</div></div>
-      <div class="stat-card purple"><div class="stat-label">المستخدمون النشطون</div><div class="stat-num" id="active-users">328</div></div>
+      <div class="stat-card"><div class="stat-label">إجمالي رسائل اليوم</div><div class="stat-num" id="msg-today">—</div></div>
+      <div class="stat-card purple"><div class="stat-label">المستخدمون النشطون</div><div class="stat-num" id="active-users">—</div></div>
     </div>
     <div style="height:14px"></div>
     <div class="tabs" id="log-filters">
@@ -127,7 +108,6 @@
     <div class="logs-list" id="logs-list"></div>
   </section>
 
-  <!-- ═══ 6: المستخدمون والأمان ═══ -->
   <section id="screen-users" class="screen">
     <div class="card toggle-row">
       <span>🛡 وضع الأمان: حظر المجهولين تلقائياً</span>
@@ -141,42 +121,28 @@
     <div id="users-list"></div>
   </section>
 
-  <!-- ═══ 7: ملف العميل ═══ -->
   <section id="screen-client" class="screen">
-    <div class="client-header">
-      <div class="avatar">س</div>
-      <div>
-        <h3>سارة العلوي</h3>
-        <span class="badge blue">✔ موثّق بالذكاء الاصطناعي</span>
+    <div id="client-view">
+      <div class="client-header">
+        <div class="avatar" id="client-avatar">؟</div>
+        <div>
+          <h3 id="client-name">—</h3>
+          <span class="badge blue">✔ موثّق بالذكاء الاصطناعي</span>
+        </div>
       </div>
-    </div>
-    <div class="data-grid">
-      <div class="data-cell"><small>الرقم الوطني</small><b>640101-12-3456</b></div>
-      <div class="data-cell"><small>الاسم الكامل</small><b>سارة العلوي</b></div>
-      <div class="data-cell"><small>تاريخ الميلاد</small><b>1 يناير 1990</b></div>
-      <div class="data-cell"><small>رقم الهاتف</small><b dir="ltr">+212 6 12 34 56 78</b></div>
-    </div>
+      <div class="data-grid" id="client-grid"></div>
 
-    <h3 class="section-title">المستندات المستخرجة</h3>
-    <div class="doc-cards">
-      <div class="doc-card"><span class="badge green">موثّق</span><div class="big-icon">🪪</div><small>البطاقة — الأمام</small></div>
-      <div class="doc-card"><span class="badge green">موثّق</span><div class="big-icon">💳</div><small>البطاقة — الخلف</small></div>
-    </div>
+      <h3 class="section-title">المستند المستخرج</h3>
+      <div class="doc-cards" id="client-docs"></div>
 
-    <h3 class="section-title">سجل الملفات</h3>
-    <div class="card">
-      <div class="file-row"><div class="file-icon">🖼</div><span class="grow">ID_Card_Front.jpg</span><span class="badge green">مكتمل</span></div>
-      <div class="file-row"><div class="file-icon">🖼</div><span class="grow">ID_Card_Back.jpg</span><span class="badge green">مكتمل</span></div>
-      <div class="file-row"><div class="file-icon">📄</div><span class="grow">Utility_Bill.pdf</span><span class="badge orange">قيد المعالجة</span></div>
-      <div class="file-row"><div class="file-icon">📄</div><span class="grow">Agreement_Signed.pdf</span><span class="badge green">مكتمل</span></div>
-    </div>
-    <div class="fab-row">
-      <button class="fab neon" data-go="screen-documents">📷 مسح جديد</button>
-      <button class="fab blue">✈️ مراسلة على تلغرام</button>
+      <h3 class="section-title">آخر العملاء</h3>
+      <div class="card" id="clients-list"></div>
+      <div class="fab-row">
+        <button class="fab neon" data-go="screen-documents">📷 مسح جديد</button>
+      </div>
     </div>
   </section>
 
-  <!-- ═══ 8: البحث العميق ═══ -->
   <section id="screen-search" class="screen">
     <h3 class="section-title" style="text-align:center">البحث العميق بالذكاء الاصطناعي</h3>
     <input class="search-bar neon-border" id="deep-search" placeholder="🔍 ابحث عن أي شيء... (أرقام هويات، أسماء، نصوص داخل الصور)">
@@ -190,7 +156,6 @@
     <div id="search-results"></div>
   </section>
 
-  <!-- ═══ 9: رؤى الأداء ═══ -->
   <section id="screen-reports" class="screen">
     <div class="cards-grid">
       <div class="card center">
@@ -218,10 +183,10 @@
     </div>
     <div class="cards-grid">
       <div class="card">
-        <h4>🏆 أفضل المستخدمين</h4>
-        <div class="bar-row"><span>1. أحمد ر.</span><div class="bar"><div class="fill" style="width:95%"></div></div></div>
-        <div class="bar-row"><span>2. مريم س.</span><div class="bar"><div class="fill" style="width:85%"></div></div></div>
-        <div class="bar-row"><span>3. يوسف د.</span><div class="bar"><div class="fill" style="width:75%"></div></div></div>
+        <h4>📦 أرقام النظام</h4>
+        <div class="bar-row"><span>🧾 العملاء</span><b id="rep-clients">—</b></div>
+        <div class="bar-row"><span>✅ المهام النشطة</span><b id="rep-tasks">—</b></div>
+        <div class="bar-row"><span>⏰ تذكيرات قادمة</span><b id="rep-reminders">—</b></div>
       </div>
       <div class="card">
         <h4>🎯 معدل نجاح OCR</h4>
@@ -233,7 +198,6 @@
     <button class="btn neon full" style="padding:16px;font-size:16px">⬇ تحميل التقرير</button>
   </section>
 
-  <!-- ═══ 10: التدريب والقوالب ═══ -->
   <section id="screen-training" class="screen">
     <h3 class="section-title">تدريب المستندات والقوالب</h3>
     <input class="search-bar" placeholder="🔍 البحث في القوالب...">
@@ -258,7 +222,6 @@
     </div>
   </section>
 
-  <!-- ═══ 4+11: الإعدادات والإشعارات ═══ -->
   <section id="screen-settings" class="screen">
     <div class="card">
       <h4>☁ Cloudflare Workers <span class="badge green" style="margin-inline-start:auto">متصل</span></h4>
@@ -280,8 +243,6 @@
       <h4>✈️ Telegram Bot API <span class="badge orange" id="tg-badge" style="margin-inline-start:auto">غير متصل</span></h4>
       <label class="flabel">رمز البوت</label>
       <input class="field" type="password" id="tg-token" placeholder="أدخل الرمز من @BotFather...">
-      <div class="toggle-row" style="margin-bottom:10px"><span>وضع Webhook</span>
-        <label class="switch"><input type="checkbox" id="tg-webhook"><span class="slider"></span></label></div>
       <button class="btn neon full" id="tg-test">اختبار الاتصال</button>
       <div id="tg-status" style="margin-bottom:10px;font-size:13px"></div>
       <div style="display:flex;gap:8px;margin-bottom:10px">
@@ -314,32 +275,25 @@
     </div>
 
     <div class="card">
-      <h4>🔔 تنبيهات الملفات المتأخرة</h4>
-      <div class="toggle-row" style="margin-bottom:6px"><span>عتبة التنبيه</span><b id="alert-val" style="color:var(--purple)">48 ساعة</b></div>
-      <input type="range" min="24" max="72" value="48" step="24" class="range" id="alert-range" style="accent-color:var(--purple)">
-      <div class="range-labels"><span>24س</span><span>48س</span><span>72س</span></div>
-      <div class="toggle-row"><span>تفعيل التنبيهات</span>
-        <label class="switch purple"><input type="checkbox" checked><span class="slider"></span></label></div>
-    </div>
-    <div class="card">
-      <h4>⏱ تردد الإشعارات</h4>
-      <div class="seg" id="notif-freq">
-        <button>فوري</button>
-        <button class="active">ملخص كل ساعة</button>
-        <button>يومي</button>
+      <h4>🔐 رمز أمان البوت</h4>
+      <p style="color:var(--muted);font-size:12px;font-weight:600;margin-bottom:10px">انسخ هذا الرمز وأرسله للبوت هكذا: <b dir="ltr">/auth الرمز</b> — فقط من يملك الرمز يستطيع استعمال البوت.</p>
+      <input class="field" id="access-token" readonly dir="ltr" style="text-align:center;font-weight:800;letter-spacing:2px">
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn neon" id="token-copy" style="flex:1">📋 نسخ الرمز</button>
+        <button class="btn" id="token-regen" style="flex:1">🔄 توليد جديد</button>
       </div>
-      <h4>👥 المستلمون</h4>
-      <div class="toggle-row" style="padding:8px 0"><span>المدير الرئيسي</span><label class="switch purple"><input type="checkbox" checked><span class="slider"></span></label></div>
-      <div class="toggle-row" style="padding:8px 0"><span>فريق الدعم</span><label class="switch purple"><input type="checkbox" checked><span class="slider"></span></label></div>
-      <div class="toggle-row" style="padding:8px 0"><span>مسؤول المبيعات</span><label class="switch purple"><input type="checkbox" checked><span class="slider"></span></label></div>
     </div>
     <div class="card">
-      <h4>🔊 أصوات التنبيه والأولوية</h4>
-      <div class="list-item"><span class="dot red"></span><span class="grow">وصول غير مصرح به — صفارة إنذار</span><span class="badge red">حرج</span></div>
-      <div class="list-item"><span class="dot cyan"></span><span class="grow">عميل جديد — رنين</span><span class="badge blue">عادي</span></div>
-      <div class="list-item"><span class="dot yellow"></span><span class="grow">مهمة متأخرة — نقطة</span><span class="badge orange">عالٍ</span></div>
-      <div class="toggle-row" style="margin-top:10px"><span>💬 رسائل المتابعة الذكية</span>
-        <label class="switch purple"><input type="checkbox" checked><span class="slider"></span></label></div>
+      <h4>⏰ مدة التذكير التلقائي</h4>
+      <p style="color:var(--muted);font-size:12px;font-weight:600;margin-bottom:10px">بعد إنشاء أي عميل يُرسَل لك تذكير على تلغرام بعد هذه المدة.</p>
+      <div class="toggle-row" style="margin-bottom:6px"><span>المدة</span><b id="rem-val" style="color:var(--neon)">5 ساعات</b></div>
+      <input type="range" min="1" max="48" value="5" step="1" class="range" id="rem-range">
+      <div class="range-labels"><span>1س</span><span>24س</span><span>48س</span></div>
+      <button class="btn neon full" id="rem-save" style="margin-top:10px">💾 حفظ مدة التذكير</button>
+    </div>
+    <div class="card">
+      <h4>⏰ التذكيرات القادمة</h4>
+      <div id="reminders-list"></div>
     </div>
     <div class="card">
       <h4>📋 سجلات الحالة</h4>
@@ -347,7 +301,6 @@
     </div>
   </section>
 
-  <!-- ═══ المزيد ═══ -->
   <section id="screen-more" class="screen">
     <h3 class="section-title">كل الوحدات</h3>
     <div class="more-grid">
@@ -370,9 +323,8 @@
   <button class="nav-btn" data-go="screen-more">⋯<span>المزيد</span></button>
 </nav>
 
-<script src="app.js?v=2.4"></script>
+<script src="app.js?v=3.0"></script>
 <script>
-// عرض الإصدار الحقيقي من الخادم للتأكد من أن التحديث وصل
 fetch('/api/version').then(r => r.json()).then(v => {
   document.getElementById('app-version').textContent = 'v' + v.version;
 }).catch(() => {
