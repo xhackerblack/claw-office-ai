@@ -7,7 +7,6 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const url = require('url');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -109,8 +108,7 @@ function handleAPI(req, res, pathname, body) {
 }
 
 const server = http.createServer((req, res) => {
-  const parsed = url.parse(req.url, true);
-  const pathname = parsed.pathname;
+  const pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname;
 
   if (pathname.startsWith('/api/')) {
     let body = '';
