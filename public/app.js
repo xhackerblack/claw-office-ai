@@ -1,4 +1,4 @@
-// Claw Office AI v3.2 — منطق الواجهة
+// Claw Office AI v3.3 — منطق الواجهة
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 
@@ -424,10 +424,10 @@ $('#tg-bot-stop').addEventListener('click', async () => {
 $('#kimi-test').addEventListener('click', async () => {
   await saveSettings();
   const st = $('#kimi-status'); showStatus(st, true, 'جارٍ الاختبار...');
-  const r = await api('/api/chat', 'POST', { message: 'اختبار اتصال — رد بجملة واحدة قصيرة' });
-  showStatus(st, !r.error, r.error ? `خطأ: ${r.error}` : 'متصل — ' + r.reply.slice(0, 70));
-  setBadge('#kimi-badge', !r.error);
-  toast(r.error ? `❌ ${r.error}` : '🌙 Kimi API يعمل بنجاح');
+  const r = await api('/api/kimi/test', 'POST', {});
+  showStatus(st, !!r.ok, r.ok ? 'متصل — تم إرسال تأكيد إلى بوت تلغرام 🌙' : `خطأ: ${r.error || 'فشل'}`);
+  setBadge('#kimi-badge', !!r.ok);
+  toast(r.ok ? '🌙 Kimi API متصل — تحقق من بوت تلغرام' : `❌ ${r.error || 'فشل الاتصال'}`);
   loadLogs();
 });
 
