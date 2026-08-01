@@ -9,6 +9,14 @@ function toast(msg) {
   setTimeout(() => t.remove(), 2500);
 }
 
+// ─── أمان: تهريب HTML لمنع حقن XSS ───
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+// تهريب رموز RegExp الخاصة حتى لا تكسر البحث
+function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
 async function api(path, method = 'GET', body) {
   const res = await fetch(path, {
     method,
@@ -48,15 +56,15 @@ async function sendChat() {
   const inp = $('#chat-text');
   if (!inp.value.trim()) return;
   const box = $('#chat-box');
-  box.insertAdjacentHTML('beforeend', `<div class="msg me">${inp.value}</div>`);
+  box.insertAdjacentHTML('beforeend', `<div class="msg me">${esc(inp.value)}</div>`);
   const q = inp.value; inp.value = '';
   box.scrollTop = box.scrollHeight;
   try {
     const r = await api('/api/ai/chat', 'POST', { message: q });
     if (r.ok) {
-      box.insertAdjacentHTML('beforeend', `<div class="msg ai">🌙 ${r.reply}</div>`);
+      box.insertAdjacentHTML('beforeend', `<div class="msg ai">🌙 ${esc(r.reply)}</div>`);
     } else {
-      box.insertAdjacentHTML('beforeend', `<div class="msg ai">⚠️ ${r.error} — (أدخل مفتاح Kimi API في الإعدادات)</div>`);
+      box.insertAdjacentHTML('beforeend', `<div class="msg ai">⚠️ ${esc(r.error)} — (أدخل مفتاح Kimi API في الإعدادات)</div>`);
       loadLogs();
     }
   } catch (e) {
@@ -73,10 +81,10 @@ async function loadTasks() {
   try {
     const tasks = await api('/api/tasks');
     $('#tasks-list').innerHTML = tasks.map(t => `
-      <div class="task-card ${t.status}">
+      <div class="task-card ${esc(t.status)}">
         <div class="task-head">
-          <div><b>${t.title}</b><br><small style="color:var(--muted)">📅 ${t.due}</small></div>
-          <span class="status ${t.status}">${STATUS_AR[t.status] || t.status}</span>
+          <div><b>${esc(t.title)}</b><br><small style="color:var(--muted)">📅 ${esc(t.due)}</small></div>
+          <span class="status ${esc(t.status)}">${STATUS_AR[t.status] || esc(t.status)}</span>
         </div>
         <div class="task-desc">${DESC_AR[t.status] || ''}</div>
       </div>`).join('');
@@ -90,11 +98,11 @@ async function loadLogs(filter = 'all') {
     const allLogs = await api('/api/logs');
     const list = filter === 'all' ? allLogs : allLogs.filter(l => l.level === filter);
     const html = list.map(l =>
-      `<div class="log-entry ${l.level}">[${l.level}] ${l.text} <small>• ${new Date(l.time).toLocaleTimeString('ar-MA')}</small></div>`
+      `<div class="log-entry ${esc(l.level)}">[${esc(l.level)}] ${esc(l.text)} <small>• ${new Date(l.time).toLocaleTimeString('ar-MA')}</small></div>`
     ).join('') || '<div class="log-entry INFO">لا توجد سجلات</div>';
     $('#logs-list').innerHTML = html;
     $('#status-logs').innerHTML = allLogs.slice(0, 5).map(l =>
-      `<div class="log-entry ${l.level}">[${l.level}] ${l.text}</div>`).join('');
+      `<div class="log-entry ${esc(l.level)}">[${esc(l.level)}] ${esc(l.text)}</div>`).join('');
   } catch (e) {}
 }
 $$('#log-filters .tab').forEach(t => t.addEventListener('click', () => {
@@ -111,10 +119,10 @@ $$('#user-tabs .tab').forEach(t => t.addEventListener('click', () => {
 function userCardHTML(u) {
   return `
   <div class="user-card ${u.blocked ? 'blocked' : ''}">
-    <div class="avatar">${u.username[0].toUpperCase()}</div>
+    <div class="avatar">${esc((u.username || '?')[0].toUpperCase())}</div>
     <div class="user-info">
-      <b>${u.handle}</b> <span class="badge ${u.blocked ? 'red' : 'green'}">${u.blocked ? 'محظور' : 'مصرّح'}</span>
-      <small>المعرف: ${u.id} • آخر نشاط: ${u.last}</small>
+      <b>${esc(u.handle || '')}</b> <span class="badge ${u.blocked ? 'red' : 'green'}">${u.blocked ? 'محظور' : 'مصرّح'}</span>
+      <small>المعرف: ${esc(u.id)} • آخر نشاط: ${esc(u.last || '')}</small>
     </div>
     <button class="btn small ${u.blocked ? 'neon' : ''}" onclick="toggleBlock(${u.id})">${u.blocked ? 'إلغاء الحظر' : 'حظر'}</button>
   </div>`;
@@ -146,11 +154,11 @@ $('#deep-search').addEventListener('input', e => {
     const q = e.target.value.trim();
     if (!q) { $('#search-results').innerHTML = ''; return; }
     const results = await api('/api/search', 'POST', { q });
-    const hl = s => (s || '').replace(new RegExp(q, 'gi'), m => `<mark>${m}</mark>`);
+    const hl = s => esc(s || '').replace(new RegExp(escRe(q), 'gi'), m => `<mark>${m}</mark>`);
     $('#search-results').innerHTML = results.map(r => `
       <div class="result-card">
         <b>${hl(r.name)}</b> <span class="badge cyan">${r.type}</span>
-        <small>${hl(r.detail)} • ${r.time || ''}</small>
+        <small>${hl(r.detail)} • ${esc(r.time || '')}</small>
       </div>`).join('') || '<div class="card center" style="color:var(--muted)">لا توجد نتائج</div>';
   }, 350);
 });
@@ -199,7 +207,7 @@ function setBadge(sel, connected) {
   b.textContent = connected ? 'متصل' : 'غير متصل';
 }
 function showStatus(el, ok, msg) {
-  el.innerHTML = `<span class="badge ${ok ? 'green' : 'red'}" style="font-size:12px">${ok ? '✅' : '❌'} ${msg}</span>`;
+  el.innerHTML = `<span class="badge ${ok ? 'green' : 'red'}" style="font-size:12px">${ok ? '✅' : '❌'} ${esc(msg)}</span>`;
 }
 
 $('#cf-deploy').addEventListener('click', async () => { await saveSettings(); toast('☁ جارٍ النشر على Cloudflare...'); loadLogs(); });
@@ -229,7 +237,7 @@ $('#tg-updates').addEventListener('click', async () => {
   if (!r.ok) { toast(`❌ ${r.error}`); loadLogs(); return; }
   $('#tg-messages').innerHTML = r.messages.map(m => `
     <div class="list-item"><span class="dot cyan"></span>
-      <span class="grow"><b>@${m.from}</b> (${m.chatId}): ${m.text}<br><small>${m.date}</small></span>
+      <span class="grow"><b>@${esc(m.from)}</b> (${esc(m.chatId)}): ${esc(m.text)}<br><small>${esc(m.date)}</small></span>
     </div>`).join('') || '<small style="color:var(--muted)">لا توجد رسائل — أرسل رسالة للبوت أولاً</small>';
   loadLogs();
 });
