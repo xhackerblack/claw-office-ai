@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 8080;
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DB_FILE = path.join(ROOT, 'data.json');
-const APP_VERSION = '3.1';
+const APP_VERSION = '3.2';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ─── DB ───
@@ -610,6 +610,26 @@ async function handleAPI(req, res, url) {
     const rem = scheduleReminder(client, null);
     addLog('success', (isNew ? '🆕 عميل جديد: ' : '🔄 تحديث عميل: ') + (client.fullName || client.nationalId));
     return json({ ...client, isNew, reminderAt: rem.at }, isNew ? 201 : 200);
+  }
+  if (req.method === 'POST' && p === '/api/clients/update') {
+    const b = await readBody(req);
+    const c = db.clients.find(x => x.id === b.id);
+    if (!c) return json({ error: 'غير موجود' }, 404);
+    for (const k of ['fullName','nationalId','birthDate','birthPlace','address','father','mother','sex','phone','email','expiry','docType','notes']) {
+      if (b[k] !== undefined) c[k] = b[k];
+    }
+    c.updatedAt = new Date().toISOString(); saveDB();
+    addLog('success', '✏️ تعديل عميل: ' + (c.fullName || c.nationalId));
+    return json(c);
+  }
+  if (req.method === 'DELETE' && p.startsWith('/api/clients/')) {
+    const id = p.split('/').pop();
+    const c = db.clients.find(x => x.id === id);
+    db.clients = db.clients.filter(x => x.id !== id);
+    db.reminders = db.reminders.filter(r => r.clientId !== id);
+    saveDB();
+    if (c) addLog('warning', '🗑️ حُذف عميل: ' + (c.fullName || c.nationalId));
+    return json({ ok: true });
   }
   if (req.method === 'POST' && p === '/api/ocr') {
     const b = await readBody(req);
