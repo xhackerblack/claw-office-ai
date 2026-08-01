@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const APP_VERSION = '2.3';
+const APP_VERSION = '2.4';
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_FILE = path.join(__dirname, 'data.json');
@@ -97,9 +97,9 @@ async function kimiChat(apiKey, model, message) {
   return lastErr;
 }
 
-// ═══════════════════════════════════════════════
-// ─── محرك البوت v2.3 (أوامر مخصصة + إصلاح كامل) ───
-// ═══════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
+// ─── محرك البوت v2.4 — ريموت كنترول كامل للتطبيق ───
+// ═══════════════════════════════════════════════════
 let botTimer = null;
 let lastUpdateId = 0;
 let botFailCount = 0;
@@ -114,10 +114,8 @@ async function botFixWebhook(token) {
     if (info.ok && info.result.url) {
       console.log(`🔧 البوت: وُجد Webhook قديم (${info.result.url}) — جارٍ حذفه...`);
       addLog('WARN', `البوت: حذف Webhook قديم كان يمنع استقبال الرسائل`);
-      await tgCall(token, 'deleteWebhook', { drop_pending_updates: false });
-    } else {
-      await tgCall(token, 'deleteWebhook', { drop_pending_updates: false });
     }
+    await tgCall(token, 'deleteWebhook', { drop_pending_updates: false });
     return true;
   } catch (e) {
     addLog('ERROR', `البوت: تعذر حذف Webhook — ${e.message}`);
@@ -125,53 +123,219 @@ async function botFixWebhook(token) {
   }
 }
 
-// معالج الأوامر المخصصة
-function buildCommandReply(cmd, user, chatId) {
+// هل المستخدم مدير؟ (أول مستخدم يأمر /admin يصبح المدير)
+function isAdmin(user) {
+  if (db.settings.adminId && db.settings.adminId === user.id) return true;
+  return false;
+}
+function requireAdmin(user) {
+  if (isAdmin(user)) return null;
+  return '🔒 هذا الأمر للمدير فقط.\nأرسل /admin لتصبح مديراً (أول من يطلبه يحصل عليه).';
+}
+
+const HELP_TEXT = `🤖 أوامر Claw Office AI — تحكم كامل بالتطبيق:
+
+📌 الأساسيات:
+/start — التسجيل والترحيب
+/help — هذه القائمة
+/id — معلومات حسابك
+/ping — فحص سرعة البوت
+/version — الإصدار ومدة التشغيل
+
+📊 المعلومات:
+/stats — إحصائيات المكتب
+/report — تقرير شامل مفصّل
+/logs — آخر السجلات (مثال: /logs 10)
+
+✅ إدارة المهام:
+/tasks — عرض كل المهام
+/addtask العنوان | العميل | الموعد — إضافة مهمة
+/done رقم — إنجاز مهمة
+/deltask رقم — حذف مهمة
+
+🧾 إدارة العملاء:
+/clients — عرض العملاء
+/addclient الاسم | الرقم الوطني — إضافة عميل
+/search كلمة — بحث عميق في كل شيء
+
+👥 المستخدمون والأمان:
+/users — المستخدمون وحالاتهم
+/admin — أن تصبح المدير
+/block رقم — حظر مستخدم (مدير)
+/unblock رقم — إلغاء حظر (مدير)
+
+📣 الإشعارات:
+/broadcast نص — رسالة لكل المستخدمين (مدير)
+/notify نص — إشعار في سجلات التطبيق
+
+💡 أرسل أي نص آخر وسيرد عليك الذكاء الاصطناعي Kimi (إذا كان مفعّلاً).`;
+
+// معالج الأوامر — ينفّذ الفعل على قاعدة بيانات التطبيق مباشرة
+async function handleCommand(token, cmd, args, user, chatId) {
   const uptimeSec = Math.floor((Date.now() - BOOT_TIME) / 1000);
   const up = uptimeSec > 3600
     ? `${Math.floor(uptimeSec / 3600)}س ${Math.floor((uptimeSec % 3600) / 60)}د`
     : uptimeSec > 60 ? `${Math.floor(uptimeSec / 60)}د ${uptimeSec % 60}ث` : `${uptimeSec}ث`;
 
   switch (cmd) {
+    // ─── الأساسيات ───
     case '/start':
-      return `🤖 أهلاً بك في Claw Office AI!\n\n✅ تم تسجيلك بنجاح يا ${user.username}\n🆔 معرف الدردشة: ${chatId}\n\n📋 الأوامر المتاحة:\n/help — كل الأوامر\n/id — معلومات حسابك\n/stats — إحصائيات المكتب\n/tasks — قائمة المهام\n/clients — قائمة العملاء\n/users — إحصائيات المستخدمين\n/logs — آخر السجلات\n/ping — فحص سرعة البوت\n/version — إصدار النظام`;
+      return `🤖 أهلاً بك في Claw Office AI!\n\n✅ تم تسجيلك بنجاح يا ${user.username}\n🆔 معرف الدردشة: ${chatId}\n\nأرسل /help لعرض كل الأوامر — يمكنك التحكم بالتطبيق كاملاً من هنا.`;
     case '/help':
-      return `📋 أوامر Claw Office AI:\n\n/start — التسجيل والترحيب\n/help — هذه القائمة\n/id — معرف الدردشة وحالة حسابك\n/stats — إحصائيات عامة\n/tasks — عرض كل المهام وحالاتها\n/clients — عرض العملاء المسجلين\n/users — عدد المستخدمين والمحظورين\n/logs — آخر 5 سجلات من النظام\n/ping — فحص أن البوت يعمل\n/version — إصدار النظام ومدة التشغيل\n\n💡 أرسل أي نص آخر وسأرد عليك بالذكاء الاصطناعي (إذا كان مفتاح Kimi مفعّلاً).`;
+      return HELP_TEXT;
     case '/id':
-      return `👤 معلومات حسابك:\n\n🆔 معرف الدردشة: ${chatId}\n🙍 الاسم: ${user.username}\n📛 الحالة: ${user.blocked ? '🚫 محظور' : '✅ نشط'}`;
+      return `👤 حسابك:\n\n🆔 معرف الدردشة: ${chatId}\n🙍 الاسم: ${user.username}\n📛 الحالة: ${user.blocked ? '🚫 محظور' : '✅ نشط'}${isAdmin(user) ? '\n👑 الصلاحية: مدير' : ''}`;
     case '/ping':
-      return `🏓 Pong! البوت يعمل بشكل ممتاز\n⚡ الإصدار: v${APP_VERSION}`;
+      return `🏓 Pong!\n⚡ البوت يعمل | الإصدار v${APP_VERSION}`;
     case '/version':
       return `📦 Claw Office AI v${APP_VERSION}\n⏱ مدة التشغيل: ${up}\n🟢 Node.js: ${process.version}`;
-    case '/stats':
-      return `📊 إحصائيات المكتب:\n\n🧾 العملاء: ${db.clients.length}\n✅ المهام: ${db.tasks.length}\n👥 المستخدمون: ${db.users.length}\n📜 السجلات: ${db.logs.length}\n🤖 دقة الذكاء الاصطناعي: 98.5%`;
-    case '/tasks': {
-      if (!db.tasks.length) return '📭 لا توجد مهام مسجلة حالياً.';
-      const list = db.tasks.slice(0, 10).map((t, i) =>
-        `${i + 1}. ${STATUS_EMOJI[t.status] || '📌'} ${t.title}\n    👤 ${t.client || '—'} | 📅 ${t.due || '—'} | ${STATUS_TEXT[t.status] || t.status}`
-      ).join('\n\n');
-      return `✅ المهام (${db.tasks.length}):\n\n${list}`;
+
+    // ─── المعلومات ───
+    case '/stats': {
+      const ready = db.tasks.filter(t => t.status === 'READY').length;
+      const blocked = db.users.filter(u => u.blocked).length;
+      return `📊 إحصائيات المكتب:\n\n🧾 العملاء: ${db.clients.length}\n✅ المهام: ${db.tasks.length} (جاهز: ${ready})\n👥 المستخدمون: ${db.users.length} (محظور: ${blocked})\n📜 السجلات: ${db.logs.length}\n🤖 دقة الذكاء الاصطناعي: 98.5%`;
     }
+    case '/report': {
+      const ready = db.tasks.filter(t => t.status === 'READY').length;
+      const proc = db.tasks.filter(t => t.status === 'PROCESSING').length;
+      const missing = db.tasks.filter(t => t.status === 'MISSING_INFO').length;
+      const blocked = db.users.filter(u => u.blocked).length;
+      const errors = db.logs.filter(l => l.level === 'ERROR').length;
+      return `📋 تقرير Claw Office AI الشامل\n⏱ ${new Date().toLocaleString('ar')} | مدة التشغيل: ${up}\n\n🧾 العملاء: ${db.clients.length}\n✅ المهام: ${db.tasks.length}\n   ⏳ قيد المعالجة: ${proc}\n   ⚠️ ناقصة: ${missing}\n   ✅ جاهزة: ${ready}\n\n👥 المستخدمون: ${db.users.length} (محظور: ${blocked})\n📜 السجلات: ${db.logs.length} (أخطاء: ${errors})\n🌙 Kimi: ${db.settings.kimiApiKey ? '✔ مفعّل' : '✖ غير مفعّل'}\n📦 الإصدار: v${APP_VERSION}`;
+    }
+    case '/logs': {
+      const n = Math.min(Math.max(parseInt(args) || 5, 1), 20);
+      const icons = { INFO: 'ℹ️', SUCCESS: '✅', WARN: '⚠️', ERROR: '❌' };
+      const list = db.logs.slice(0, n).map(l => `${icons[l.level] || '•'} ${l.text}`).join('\n');
+      return `📜 آخر ${n} سجلات:\n\n${list || 'لا توجد سجلات'}`;
+    }
+
+    // ─── إدارة المهام ───
+    case '/tasks': {
+      if (!db.tasks.length) return '📭 لا توجد مهام.\nأضف مهمة: /addtask العنوان | العميل | الموعد';
+      const list = db.tasks.slice(0, 15).map((t, i) =>
+        `${i + 1}. ${STATUS_EMOJI[t.status] || '📌'} ${t.title}\n    👤 ${t.client || '—'} | 📅 ${t.due || '—'}`
+      ).join('\n\n');
+      return `✅ المهام (${db.tasks.length}):\n\n${list}\n\n💡 /done رقم — إنجاز | /deltask رقم — حذف`;
+    }
+    case '/addtask': {
+      if (!args) return '📝 الصيغة:\n/addtask العنوان | العميل | الموعد\nمثال: /addtask مراجعة العقد | شركة النور | 15 غشت';
+      const parts = args.split('|').map(s => s.trim());
+      const t = { id: Date.now().toString(), title: parts[0], client: parts[1] || '—', due: parts[2] || '—', status: 'PROCESSING' };
+      db.tasks.unshift(t);
+      addLog('SUCCESS', `مهمة جديدة عبر البوت من @${user.username}: ${t.title}`);
+      saveDB();
+      return `✅ تمت إضافة المهمة بنجاح!\n\n📌 ${t.title}\n👤 ${t.client} | 📅 ${t.due}\n⏳ الحالة: قيد المعالجة\n\nتظهر الآن في التطبيق مباشرة.`;
+    }
+    case '/done': {
+      const i = parseInt(args) - 1;
+      if (isNaN(i) || !db.tasks[i]) return '❌ رقم غير صالح.\nأرسل /tasks لعرض الأرقام.';
+      db.tasks[i].status = 'READY';
+      addLog('SUCCESS', `أنجز @${user.username} المهمة: ${db.tasks[i].title}`);
+      saveDB();
+      return `✅ أُنجزت المهمة:\n${db.tasks[i].title}\n\nتحدّثت في التطبيق فوراً.`;
+    }
+    case '/deltask': {
+      const i = parseInt(args) - 1;
+      if (isNaN(i) || !db.tasks[i]) return '❌ رقم غير صالح.\nأرسل /tasks لعرض الأرقام.';
+      const removed = db.tasks.splice(i, 1)[0];
+      addLog('WARN', `حذف @${user.username} المهمة: ${removed.title}`);
+      saveDB();
+      return `🗑 حُذفت المهمة:\n${removed.title}`;
+    }
+
+    // ─── إدارة العملاء ───
     case '/clients': {
-      if (!db.clients.length) return '📭 لا يوجد عملاء مسجلون حالياً.\nأضف عميلاً من التطبيق وسيظهر هنا.';
-      const list = db.clients.slice(0, 10).map((c, i) =>
-        `${i + 1}. 👤 ${c.fullName || 'بدون اسم'}${c.nationalId ? ` — ${c.nationalId}` : ''}`
+      if (!db.clients.length) return '📭 لا يوجد عملاء.\nأضف عميلاً: /addclient الاسم | الرقم الوطني';
+      const list = db.clients.slice(0, 15).map((c, i) =>
+        `${i + 1}. 👤 ${c.fullName || 'بدون اسم'}${c.nationalId ? `\n    🪪 ${c.nationalId}` : ''}${c.verified ? ' ✔' : ''}`
       ).join('\n');
       return `🧾 العملاء (${db.clients.length}):\n\n${list}`;
     }
+    case '/addclient': {
+      if (!args) return '📝 الصيغة:\n/addclient الاسم | الرقم الوطني\nمثال: /addclient سارة العلوي | AB123456';
+      const parts = args.split('|').map(s => s.trim());
+      const c = { id: Date.now().toString(), fullName: parts[0], nationalId: parts[1] || '', verified: false, createdAt: new Date().toISOString() };
+      db.clients.unshift(c);
+      addLog('SUCCESS', `عميل جديد عبر البوت من @${user.username}: ${c.fullName}`);
+      saveDB();
+      return `🧾 تمت إضافة العميل بنجاح!\n\n👤 ${c.fullName}${c.nationalId ? `\n🪪 ${c.nationalId}` : ''}\n\nيظهر الآن في التطبيق وفي البحث العميق.`;
+    }
+
+    // ─── البحث العميق ───
+    case '/search': {
+      if (!args) return '🔍 الصيغة: /search كلمة البحث';
+      const q = args.toLowerCase();
+      const results = [];
+      db.clients.forEach(c => {
+        if (JSON.stringify(c).toLowerCase().includes(q)) results.push(`🧾 عميل: ${c.fullName || ''}${c.nationalId ? ` — ${c.nationalId}` : ''}`);
+      });
+      db.tasks.forEach(t => {
+        if (JSON.stringify(t).toLowerCase().includes(q)) results.push(`✅ مهمة: ${t.title} (${STATUS_TEXT[t.status] || t.status})`);
+      });
+      if (!results.length) return `🔍 لا نتائج عن «${args}»`;
+      return `🔍 نتائج البحث عن «${args}» (${results.length}):\n\n${results.slice(0, 15).join('\n')}`;
+    }
+
+    // ─── المستخدمون والأمان ───
     case '/users': {
-      const blocked = db.users.filter(u => u.blocked).length;
-      return `👥 إحصائيات المستخدمين:\n\n✅ النشطون: ${db.users.length - blocked}\n🚫 المحظورون: ${blocked}\n📊 الإجمالي: ${db.users.length}`;
-    }
-    case '/logs': {
-      const icons = { INFO: 'ℹ️', SUCCESS: '✅', WARN: '⚠️', ERROR: '❌' };
-      const list = db.logs.slice(0, 5).map(l =>
-        `${icons[l.level] || '•'} ${l.text}`
+      if (!db.users.length) return '📭 لا يوجد مستخدمون.';
+      const list = db.users.slice(0, 15).map(u =>
+        `${u.blocked ? '🚫' : '✅'} ${u.handle || u.username} — #${u.id}${isAdmin(u) ? ' 👑' : ''}`
       ).join('\n');
-      return `📜 آخر السجلات:\n\n${list || 'لا توجد سجلات'}`;
+      return `👥 المستخدمون (${db.users.length}):\n\n${list}\n\n💡 /block رقم | /unblock رقم (للمدير)`;
     }
+    case '/admin': {
+      if (!db.settings.adminId) {
+        db.settings.adminId = user.id;
+        saveDB();
+        addLog('SUCCESS', `👑 @${user.username} أصبح مدير النظام`);
+        return '👑 مبروك! أنت الآن مدير النظام.\nيمكنك استخدام /block و /unblock و /broadcast';
+      }
+      if (isAdmin(user)) return '👑 أنت مدير النظام بالفعل.';
+      return '🔒 يوجد مدير مسجّل بالفعل.';
+    }
+    case '/block': {
+      const deny = requireAdmin(user); if (deny) return deny;
+      const target = db.users.find(u => u.id == args);
+      if (!target) return '❌ مستخدم غير موجود.\nأرسل /users لعرض الأرقام.';
+      target.blocked = true; target.status = 'BLOCKED';
+      addLog('ERROR', `المدير @${user.username} حظر ${target.handle}`);
+      saveDB();
+      return `🚫 تم حظر ${target.handle}\nلن يستطيع استخدام البوت بعد الآن.`;
+    }
+    case '/unblock': {
+      const deny = requireAdmin(user); if (deny) return deny;
+      const target = db.users.find(u => u.id == args);
+      if (!target) return '❌ مستخدم غير موجود.';
+      target.blocked = false; target.status = 'ACTIVE';
+      addLog('SUCCESS', `المدير @${user.username} ألغى حظر ${target.handle}`);
+      saveDB();
+      return `✅ تم إلغاء حظر ${target.handle}`;
+    }
+
+    // ─── الإشعارات ───
+    case '/broadcast': {
+      const deny = requireAdmin(user); if (deny) return deny;
+      if (!args) return '📣 الصيغة: /broadcast نص الرسالة';
+      const targets = db.users.filter(u => !u.blocked && typeof u.id === 'number' && u.id > 1000);
+      let sent = 0, failed = 0;
+      for (const u of targets) {
+        const r = await tgCall(token, 'sendMessage', { chat_id: u.id, text: `📣 رسالة من الإدارة:\n\n${args}` });
+        if (r.ok) sent++; else failed++;
+      }
+      addLog('INFO', `بثّ @${user.username} رسالة إلى ${sent} مستخدم`);
+      return `📣 تم البث!\n✔ وصلت: ${sent}\n✖ فشلت: ${failed}`;
+    }
+    case '/notify': {
+      if (!args) return '🔔 الصيغة: /notify نص الإشعار';
+      addLog('WARN', `🔔 إشعار من @${user.username}: ${args}`);
+      return `🔔 تم تسجيل الإشعار في سجلات التطبيق:\n«${args}»\n\nسيظهر في صفحة السجلات فوراً.`;
+    }
+
     default:
-      return null; // ليس أمراً — نمرّر للذكاء الاصطناعي
+      return null;
   }
 }
 
@@ -227,12 +391,17 @@ async function botTick() {
       addLog('INFO', `رسالة من @${username}: ${text.slice(0, 60)}`);
       console.log(`📩 @${username}: ${text.slice(0, 60)}`);
 
-      // استخراج الأمر (يدعم /cmd@BotName)
-      const cmd = text.split(' ')[0].split('@')[0].toLowerCase();
-      let reply = text.startsWith('/') ? buildCommandReply(cmd, user, chatId) : null;
+      // استخراج الأمر ومعطياته (يدعم /cmd@BotName)
+      const firstSpace = text.indexOf(' ');
+      const rawCmd = (firstSpace === -1 ? text : text.slice(0, firstSpace));
+      const cmd = rawCmd.split('@')[0].toLowerCase();
+      const args = firstSpace === -1 ? '' : text.slice(firstSpace + 1).trim();
 
-      if (reply === null && text.startsWith('/') && !buildCommandReply(cmd, user, chatId)) {
-        reply = `❓ أمر غير معروف: ${cmd}\nأرسل /help لعرض الأوامر المتاحة.`;
+      let reply = null;
+      if (text.startsWith('/')) {
+        reply = await handleCommand(token, cmd, args, user, chatId);
+        if (reply === null) reply = `❓ أمر غير معروف: ${cmd}\nأرسل /help لعرض الأوامر.`;
+        else addLog('SUCCESS', `نُفّذ الأمر ${cmd} بواسطة @${username}`);
       }
 
       if (reply === null) {
@@ -242,10 +411,8 @@ async function botTick() {
           reply = ai.choices?.[0]?.message?.content || 'عذراً، لم أستطع الرد الآن.';
           addLog('SUCCESS', `رد ذكي (Kimi) على @${username}`);
         } else {
-          reply = '🤖 استلمت رسالتك. فعّل مفتاح Kimi API من الإعدادات للردود الذكية، أو أرسل /help للأوامر.';
+          reply = '🤖 استلمت رسالتك.\nفعّل مفتاح Kimi من الإعدادات للردود الذكية، أو أرسل /help للأوامر.';
         }
-      } else {
-        addLog('SUCCESS', `تم الرد على ${cmd} من @${username}`);
       }
 
       const sent = await tgCall(token, 'sendMessage', { chat_id: chatId, text: reply });
@@ -413,12 +580,8 @@ async function handleAPI(req, res, pathname, body) {
   return send({ error: 'المسار غير موجود' }, 404);
 }
 
-// ─── عدادات مراقبة الأداء ───
-let reqCount = 0;
-
 const server = http.createServer((req, res) => {
   const t0 = Date.now();
-  reqCount++;
   const pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname;
 
   res.on('finish', () => {
