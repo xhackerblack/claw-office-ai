@@ -71,7 +71,7 @@
     <div class="card chat">
       <h4>مدير الذكاء الاصطناعي</h4>
       <div id="chat-box">
-        <div class="msg ai">🤖 هل يمكنك تأكيد الرقم الأخير في بطاقة الهوية؟</div>
+        <div class="msg ai">🤖 أهلاً! أنا مدير الذكاء الاصطناعي. أدخل مفتاح Kimi API في الإعدادات لتفعيل ردودي الذكية.</div>
       </div>
       <div class="chat-input">
         <input type="text" id="chat-text" placeholder="اكتب ردك...">
@@ -181,15 +181,29 @@
     </div>
     <div class="card">
       <h4>✈️ Telegram Bot API</h4>
-      <input class="field" type="password" id="tg-token" placeholder="رمز البوت">
+      <input class="field" type="password" id="tg-token" placeholder="رمز البوت (من @BotFather)">
       <div class="toggle-row"><span>وضع Webhook</span>
         <label class="switch"><input type="checkbox" id="tg-webhook"><span class="slider"></span></label></div>
       <button class="btn neon" id="tg-test">اختبار الاتصال</button>
+      <div id="tg-status" style="margin-top:8px;font-size:13px"></div>
+      <h4 style="margin-top:14px">📨 إرسال رسالة</h4>
+      <input class="field" id="tg-chatid" placeholder="معرف الدردشة (Chat ID)">
+      <input class="field" id="tg-msg" placeholder="نص الرسالة">
+      <button class="btn neon" id="tg-send">إرسال</button>
+      <button class="btn" id="tg-updates">🔄 جلب آخر الرسائل</button>
+      <div id="tg-messages" style="margin-top:8px"></div>
     </div>
     <div class="card">
-      <h4>🧠 Groq / مزود الذكاء الاصطناعي</h4>
-      <input class="field" type="password" id="groq-key" placeholder="مفتاح API">
-      <button class="btn neon" id="groq-test">اختبار الاتصال</button>
+      <h4>🌙 Kimi API (Moonshot AI)</h4>
+      <input class="field" type="password" id="kimi-key" placeholder="مفتاح API (sk-...)">
+      <select class="field" id="kimi-model">
+        <option value="kimi-k2-0711-preview">Kimi K2</option>
+        <option value="moonshot-v1-8k">Moonshot v1 (8k)</option>
+        <option value="moonshot-v1-32k">Moonshot v1 (32k)</option>
+        <option value="moonshot-v1-128k">Moonshot v1 (128k)</option>
+      </select>
+      <button class="btn neon" id="kimi-test">اختبار الاتصال</button>
+      <div id="kimi-status" style="margin-top:8px;font-size:13px"></div>
     </div>
     <div class="card">
       <h4>🔔 الإشعارات والتنبيهات</h4>
