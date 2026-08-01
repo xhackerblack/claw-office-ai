@@ -1,658 +1,671 @@
 #!/usr/bin/env node
-/**
- * Claw Office AI - خادم وكيل المكتب الذكي
- * يعمل بدون أي تبعيات خارجية (Node.js فقط) - مثالي لـ Termux
- * التشغيل: node server.js
- */
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
+const crypto = require('crypto');
+const PORT = process.env.PORT || 3000;
+const ROOT = __dirname;
+const PUBLIC_DIR = path.join(ROOT, 'public');
+const DB_FILE = path.join(ROOT, 'data.json');
+const APP_VERSION = '3.0';
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-const APP_VERSION = '2.4';
-const PORT = process.env.PORT || 8080;
-const PUBLIC_DIR = path.join(__dirname, 'public');
-const DATA_FILE = path.join(__dirname, 'data.json');
-const BOOT_TIME = Date.now();
+// ─── DB ───
+let db = { clients: [], tasks: [], users: [], logs: [], reminders: [], settings: {} };
+if (fs.existsSync(DB_FILE)) { try { db = JSON.parse(fs.readFileSync(DB_FILE)); } catch (e) {} }
+db.clients = db.clients || []; db.tasks = db.tasks || []; db.users = db.users || [];
+db.logs = db.logs || []; db.reminders = db.reminders || []; db.settings = db.settings || {};
+function saveDB() { try { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); } catch (e) {} }
+function addLog(level, text) { db.logs.unshift({ level, text, at: new Date().toISOString() }); if (db.logs.length > 500) db.logs = db.logs.slice(0, 500); }
 
-// ─── قاعدة بيانات JSON بسيطة ───
-let db = { clients: [], tasks: [], users: [], logs: [], settings: {} };
-try {
-  if (fs.existsSync(DATA_FILE)) db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-} catch (e) { console.log('[WARN] تعذر قراءة data.json، سيتم البدء بقاعدة فارغة'); }
-
-function saveDB() {
-  try { fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2)); } catch (e) {}
+// ─── Security token (التوكن السري للبوت) ───
+if (!db.settings.accessToken) {
+  db.settings.accessToken = 'COA-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+  addLog('system', '🔐 تم توليد رمز أمان جديد للبوت');
 }
+if (!db.settings.reminderHours) db.settings.reminderHours = 5;
 
-// بيانات تجريبية أول مرة
-if (db.logs.length === 0) {
-  db.logs = [
-    { time: new Date().toISOString(), level: 'INFO', text: 'تمت تهيئة خادم Claw Office AI' },
-    { time: new Date().toISOString(), level: 'SUCCESS', text: 'قاعدة البيانات جاهزة' },
+// ─── قاعدة بيانات أولية مدرّبة من مستنداتك ───
+if (!db.settings.seededV3) {
+  const seed = [
+    { fullName: 'AUCHANE HASSANIA', nationalId: 'CD220673', birthDate: '18.05.1984', birthPlace: 'MEKNES', address: 'DOUAR NZALA RDAYA MEKNES', father: 'BOUAZZA ben LAHCEN', mother: 'FATIMA bent ABDESLAM', sex: 'F', phone: '', email: '', expiry: '14.11.2035', docType: 'بطاقة التعريف الوطنية', notes: 'CAN 735285 | رقم عقد الازدياد 383/4/1984' },
+    { fullName: 'CHERGUI SIHAM', nationalId: 'DO59740', birthDate: '10.09.1998', birthPlace: 'CHERKAOUA MEKNES', address: 'OUED JDIDA LA GARE OUED JDIDA MEKNES', father: 'ABDELLAH ben ELKHAYATE', mother: 'TOURIA bent DAOUD', sex: 'F', phone: '', email: '', expiry: '10.10.2027', docType: 'بطاقة التعريف الوطنية', notes: 'رقم عقد الازدياد 139/1998' },
+    { fullName: 'AIT BAHAMMOU MEHDI', nationalId: 'V172782', birthDate: '20/03/1979', birthPlace: '', address: 'AIT BOUBIDMANE / Douar AIT HSSAINE', father: '', mother: '', sex: 'M', phone: '0667752577', email: '', expiry: '', docType: 'وصل الدعم الاجتماعي', notes: 'طلب 1255426 | IDCS 4663232614 | متزوج | RIB 007780000146508092371289 ATTIJARIWAFA BANK' },
+    { fullName: 'ABDELILAH TOUZANI', nationalId: 'D608574', birthDate: '', birthPlace: '', address: '', father: '', mother: '', sex: '', phone: '0622235252', email: '', expiry: '', docType: 'سجل معاملات', notes: 'معاملات بمبلغ 492 MAD (3 عمليات)' },
+    { fullName: 'MOHAMED (BRARHA)', nationalId: '', birthDate: '', birthPlace: 'TAZA - BRARHA', address: 'Douar OULED BOUSSADEN, Commune BRARHA, TAINASTE, TAZA', father: '', mother: '', sex: 'M', phone: '0613128808', email: 'boubidmane.sarl@gmail.com', expiry: '', docType: 'استمارة تسجيل', notes: 'رسم الولادة 201/1993' },
+    { fullName: 'عبدالرحيم', nationalId: '5500175286', birthDate: '', birthPlace: 'عمالة الحاجب', address: '', father: '', mother: '', sex: 'M', phone: '', email: '', expiry: '', docType: 'استمارة عائلية (notadamon)', notes: 'الزوجة: يسرى 6820281957 | الأبناء: عبد الصمد 6550328572، أمير 7452305474' },
+    { fullName: 'زبون LN5915', nationalId: 'LN5915', birthDate: '', birthPlace: '', address: '', father: '', mother: '', sex: '', phone: '0808647073', email: '', expiry: '', docType: 'إيصال فاتورة (IAM)', notes: 'وصل A488418184 | معاملة 841038309 | 501.25 DH | 15/04/2026' },
+    { fullName: 'جهة اتصال بريدية', nationalId: '', birthDate: '', birthPlace: '', address: '', father: '', mother: '', sex: '', phone: '', email: 'cvreceuil@gmail.com', expiry: '', docType: 'بريد إلكتروني', notes: '' }
   ];
-  db.tasks = [
-    { id: '1', title: 'ملفات المراجعة الضريبية', client: 'العميل أ', due: '26 أكتوبر', status: 'PROCESSING' },
-    { id: '2', title: 'مراجعة العقد', client: 'العميل ب', due: '27 أكتوبر', status: 'MISSING_INFO' },
-    { id: '3', title: 'التقرير المالي Q3', client: 'العميل ج', due: '30 أكتوبر', status: 'READY' },
-  ];
-  db.users = [
-    { id: 1, username: 'john_doe', handle: '@john_doe', status: 'ACTIVE', blocked: false, last: 'الآن' },
-    { id: 2, username: 'unknown_99', handle: '@unknown_99', status: 'BLOCKED', blocked: true, last: 'منذ ساعة' },
-  ];
+  const now = new Date().toISOString();
+  seed.forEach((c, i) => db.clients.unshift({ id: 'seed' + (i + 1), ...c, source: 'تدريب أولي 📚', verified: true, createdAt: now, updatedAt: now }));
+  db.settings.seededV3 = true;
+  addLog('system', '📚 تم بناء قاعدة البيانات الأولية من ' + seed.length + ' مستندات مدرّبة');
   saveDB();
 }
 
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json',
-};
-
-function addLog(level, text) {
-  db.logs.unshift({ time: new Date().toISOString(), level, text });
-  if (db.logs.length > 500) db.logs = db.logs.slice(0, 500);
+// ─── Client upsert + reminder ───
+function upsertClient(data, source) {
+  const nid = String(data.nationalId || '').trim();
+  let c = nid ? db.clients.find(x => String(x.nationalId || '').toLowerCase() === nid.toLowerCase()) : null;
+  if (!c && data.phone) c = db.clients.find(x => x.phone && x.phone === data.phone);
+  const isNew = !c;
+  if (!c) { c = { id: Date.now().toString() + Math.floor(Math.random() * 1000), createdAt: new Date().toISOString() }; db.clients.unshift(c); }
+  for (const k of ['fullName','nationalId','birthDate','birthPlace','address','father','mother','sex','phone','email','expiry','docType','notes']) {
+    if (data[k] !== undefined && String(data[k]).trim() !== '') c[k] = data[k];
+  }
+  c.verified = true; c.source = source; c.updatedAt = new Date().toISOString();
   saveDB();
+  return { client: c, isNew };
 }
 
-// ─── مساعدات الاتصال الخارجي ───
-async function tgCall(token, method, payload = {}) {
-  const r = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  return r.json();
+function scheduleReminder(client, chatId) {
+  const hours = parseFloat(db.settings.reminderHours) || 5;
+  const r = { id: Date.now().toString() + Math.floor(Math.random() * 1000), clientId: client.id, clientName: client.fullName || 'عميل', chatId: chatId || null, at: Date.now() + hours * 3600e3, hours, sent: false, createdAt: new Date().toISOString() };
+  db.reminders.unshift(r);
+  if (db.reminders.length > 200) db.reminders = db.reminders.slice(0, 200);
+  saveDB();
+  return r;
 }
 
-async function kimiChat(apiKey, model, message) {
-  const payload = JSON.stringify({
-    model: model || 'kimi-k2-0711-preview',
-    messages: [
-      { role: 'system', content: 'أنت مدير الذكاء الاصطناعي في تطبيق Claw Office AI لإدارة المكاتب. أجب بالعربية باختصار واحترافية.' },
-      { role: 'user', content: message },
-    ],
-    temperature: 0.6,
-  });
-  // تجربة النطاق الدولي ثم الصيني كاحتياط
+function timeAgoStr(iso) {
+  const m = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+  if (m < 1) return 'الآن'; if (m < 60) return 'منذ ' + m + ' دقيقة';
+  const h = Math.floor(m / 60); if (h < 24) return 'منذ ' + h + ' ساعة';
+  return 'منذ ' + Math.floor(h / 24) + ' يوم';
+}
+function fmtReminder(r) {
+  const d = new Date(r.at);
+  return '⏰ تذكير بعد ' + r.hours + ' ساعة — ' + d.toLocaleString('ar-MA', { timeZone: 'Africa/Casablanca' });
+}
+
+// ─── Telegram helpers ───
+async function tgCall(token, method, body) {
+  const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  return res.json();
+}
+async function botReply(token, chatId, payload) {
+  if (typeof payload === 'string') payload = { text: payload };
+  return tgCall(token, 'sendMessage', { chat_id: chatId, ...payload });
+}
+
+const MAIN_KB = { keyboard: [
+  [{ text: '📊 الإحصائيات' }, { text: '🧾 العملاء' }],
+  [{ text: '✅ المهام' }, { text: '⏰ التذكيرات' }],
+  [{ text: '🔍 بحث' }, { text: '📜 السجلات' }],
+  [{ text: '➕ إضافة عميل' }, { text: '🆔 معرفي' }],
+  [{ text: '❓ المساعدة' }]
+], resize_keyboard: true };
+const BTN = { '📊 الإحصائيات': '/stats', '🧾 العملاء': '/clients', '✅ المهام': '/tasks', '⏰ التذكيرات': '/reminders', '📜 السجلات': '/logs', '🆔 معرفي': '/id', '❓ المساعدة': '/help' };
+const pending = new Map(); // userId -> {action}
+
+// ─── Kimi OCR (تحليل الصور بالذكاء الاصطناعي) ───
+const OCR_PROMPT = 'أنت نظام استخراج بيانات مستندات مغربية. حلل هذه الصورة وأرجع JSON فقط (بدون أي نص آخر) بالمفاتيح: fullName (الاسم الكامل), nationalId (رقم البطاقة مثل CD220673 أو المعرف الرقمي), birthDate, birthPlace, address, father, mother, sex (M/F), phone, email, expiry (تاريخ انتهاء الصلاحية), docType (نوع المستند بالعربية), notes (أي أرقام مهمة أخرى: مبالغ، RIB، أرقام طلبات). إن لم يوجد حقل اتركه فارغاً "". أسماء الأشخاص بالحروف اللاتينية كما في المستند.';
+async function kimiOCR(apiKey, base64, mime) {
+  const payload = {
+    model: db.settings.kimiVisionModel || 'moonshot-v1-8k-vision-preview',
+    temperature: 0.1,
+    messages: [{ role: 'user', content: [
+      { type: 'image_url', image_url: { url: 'data:' + (mime || 'image/jpeg') + ';base64,' + base64 } },
+      { type: 'text', text: OCR_PROMPT }
+    ] }],
+    response_format: { type: 'json_object' }
+  };
   const hosts = ['https://api.moonshot.ai/v1/chat/completions', 'https://api.moonshot.cn/v1/chat/completions'];
-  let lastErr = null;
+  let lastErr = '';
   for (const url of hosts) {
     try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        body: payload,
-      });
-      const j = await r.json();
-      // إن كان الخطأ مصادقة، لا فائدة من تجربة نطاق آخر
-      if (r.status === 401 || r.status === 403) return j;
-      if (j.choices) return j;
-      lastErr = j;
-    } catch (e) { lastErr = { error: { message: e.message } }; }
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey }, body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || ('HTTP ' + res.status));
+      const reply = data.choices?.[0]?.message?.content || '';
+      const m = reply.match(/\{[\s\S]*\}/);
+      if (m) return JSON.parse(m[0]);
+      throw new Error('رد غير صالح');
+    } catch (e) { lastErr = e.message; }
   }
-  return lastErr;
+  throw new Error(lastErr || 'فشل تحليل الصورة');
 }
 
-// ═══════════════════════════════════════════════════
-// ─── محرك البوت v2.4 — ريموت كنترول كامل للتطبيق ───
-// ═══════════════════════════════════════════════════
-let botTimer = null;
-let lastUpdateId = 0;
-let botFailCount = 0;
-
-const STATUS_EMOJI = { PROCESSING: '⏳', MISSING_INFO: '⚠️', READY: '✅' };
-const STATUS_TEXT = { PROCESSING: 'قيد المعالجة', MISSING_INFO: 'ينقصه معلومات', READY: 'جاهز' };
-
-// حذف أي Webhook قديم — السبب الأول لعدم استقبال الرسائل (خطأ 409)
-async function botFixWebhook(token) {
-  try {
-    const info = await tgCall(token, 'getWebhookInfo');
-    if (info.ok && info.result.url) {
-      console.log(`🔧 البوت: وُجد Webhook قديم (${info.result.url}) — جارٍ حذفه...`);
-      addLog('WARN', `البوت: حذف Webhook قديم كان يمنع استقبال الرسائل`);
-    }
-    await tgCall(token, 'deleteWebhook', { drop_pending_updates: false });
-    return true;
-  } catch (e) {
-    addLog('ERROR', `البوت: تعذر حذف Webhook — ${e.message}`);
-    return false;
-  }
+async function processImageToClient(base64, mime, source, chatId) {
+  const apiKey = db.settings.kimiApiKey;
+  if (!apiKey) throw new Error('لم يتم ضبط مفتاح Kimi API — أضفه من الإعدادات');
+  const data = await kimiOCR(apiKey, base64, mime);
+  if (!data || (!data.fullName && !data.nationalId && !data.phone && !data.email)) throw new Error('لم يتم العثور على بيانات قابلة للاستخراج في الصورة');
+  const { client, isNew } = upsertClient(data, source);
+  const rem = scheduleReminder(client, chatId);
+  addLog('success', (isNew ? '🆕 عميل جديد من صورة: ' : '🔄 تحديث عميل من صورة: ') + (client.fullName || client.nationalId));
+  return { client, isNew, reminder: rem };
 }
 
-// هل المستخدم مدير؟ (أول مستخدم يأمر /admin يصبح المدير)
-function isAdmin(user) {
-  if (db.settings.adminId && db.settings.adminId === user.id) return true;
-  return false;
+function clientCardText(c, isNew, rem) {
+  const rows = [
+    '👤 الاسم: ' + (c.fullName || '—'),
+    c.nationalId ? '🆔 المعرف: ' + c.nationalId : null,
+    c.birthDate ? '🎂 الازدياد: ' + c.birthDate + (c.birthPlace ? ' — ' + c.birthPlace : '') : null,
+    c.sex ? '⚧ الجنس: ' + (c.sex === 'F' ? 'أنثى' : 'ذكر') : null,
+    c.address ? '📍 العنوان: ' + c.address : null,
+    c.father ? '👨 الأب: ' + c.father : null,
+    c.mother ? '👩 الأم: ' + c.mother : null,
+    c.phone ? '📞 الهاتف: ' + c.phone : null,
+    c.email ? '✉️ البريد: ' + c.email : null,
+    c.expiry ? '📅 صالحة إلى: ' + c.expiry : null,
+    c.docType ? '📄 النوع: ' + c.docType : null,
+    c.notes ? '📝 ملاحظات: ' + c.notes : null
+  ].filter(Boolean).join('\n');
+  let t = (isNew ? '✅ تم إنشاء ملف عميل جديد\n\n' : '🔄 تم تحديث ملف العميل الموجود\n\n') + rows;
+  if (rem) t += '\n\n━━━━━━━━━━━━━━\n🔔 ' + fmtReminder(rem) + '\nسيصلك إشعار على تلغرام عند حلول الوقت.';
+  return t;
 }
-function requireAdmin(user) {
-  if (isAdmin(user)) return null;
-  return '🔒 هذا الأمر للمدير فقط.\nأرسل /admin لتصبح مديراً (أول من يطلبه يحصل عليه).';
-}
 
-const HELP_TEXT = `🤖 أوامر Claw Office AI — تحكم كامل بالتطبيق:
+// ─── Bot Engine ───
+let botRunning = false, lastUpdateId = 0, botFailCount = 0;
+const BOT_START = Date.now();
 
-📌 الأساسيات:
-/start — التسجيل والترحيب
-/help — هذه القائمة
-/id — معلومات حسابك
-/ping — فحص سرعة البوت
-/version — الإصدار ومدة التشغيل
+const HELP_TEXT = `🤖 Claw Office AI — الأوامر:
 
-📊 المعلومات:
-/stats — إحصائيات المكتب
-/report — تقرير شامل مفصّل
-/logs — آخر السجلات (مثال: /logs 10)
+🔐 الأمان:
+/auth رمز — تفعيل الوصول (انسخ الرمز من الإعدادات)
 
-✅ إدارة المهام:
-/tasks — عرض كل المهام
-/addtask العنوان | العميل | الموعد — إضافة مهمة
-/done رقم — إنجاز مهمة
-/deltask رقم — حذف مهمة
+🧾 العملاء:
+/addclient اسم | معرف | هاتف — إضافة عميل (+ تذكير تلقائي)
+/clients — قائمة العملاء
+📷 أرسل صورة مستند — استخراج تلقائي + ملف عميل + تذكير
 
-🧾 إدارة العملاء:
-/clients — عرض العملاء
-/addclient الاسم | الرقم الوطني — إضافة عميل
-/search كلمة — بحث عميق في كل شيء
+✅ المهام:
+/addtask عنوان | تاريخ | أولوية
+/tasks — المهام (أزرار ✅/🗑)
+/done رقم | /deltask رقم
 
-👥 المستخدمون والأمان:
-/users — المستخدمون وحالاتهم
-/admin — أن تصبح المدير
-/block رقم — حظر مستخدم (مدير)
-/unblock رقم — إلغاء حظر (مدير)
+⏰ التذكيرات:
+/reminders — التذكيرات القادمة والمرسلة
+/cancelreminder رقم — إلغاء تذكير
 
-📣 الإشعارات:
-/broadcast نص — رسالة لكل المستخدمين (مدير)
-/notify نص — إشعار في سجلات التطبيق
+📊 النظام:
+/stats — إحصائيات | /report — تقرير
+/search كلمة — بحث شامل
+/logs — السجلات | /id — معرفك
+/ping — فحص الاستجابة | /version — الإصدار
 
-💡 أرسل أي نص آخر وسيرد عليك الذكاء الاصطناعي Kimi (إذا كان مفعّلاً).`;
+👑 المدير:
+/users /block رقم /unblock رقم
+/notify نص /broadcast نص
+/newtoken — توليد رمز أمان جديد`;
 
-// معالج الأوامر — ينفّذ الفعل على قاعدة بيانات التطبيق مباشرة
+function requireAdmin(user) { return db.settings.adminId === user.id; }
+
 async function handleCommand(token, cmd, args, user, chatId) {
-  const uptimeSec = Math.floor((Date.now() - BOOT_TIME) / 1000);
-  const up = uptimeSec > 3600
-    ? `${Math.floor(uptimeSec / 3600)}س ${Math.floor((uptimeSec % 3600) / 60)}د`
-    : uptimeSec > 60 ? `${Math.floor(uptimeSec / 60)}د ${uptimeSec % 60}ث` : `${uptimeSec}ث`;
-
+  const now = Date.now();
   switch (cmd) {
-    // ─── الأساسيات ───
-    case '/start':
-      return `🤖 أهلاً بك في Claw Office AI!\n\n✅ تم تسجيلك بنجاح يا ${user.username}\n🆔 معرف الدردشة: ${chatId}\n\nأرسل /help لعرض كل الأوامر — يمكنك التحكم بالتطبيق كاملاً من هنا.`;
-    case '/help':
-      return HELP_TEXT;
+    case '/start': case '/help':
+      return { text: (cmd === '/start' ? 'مرحباً بك في Claw Office AI! 🎉\nاختر من الأزرار أسفله أو استعمل الأوامر.\n\n' : '') + HELP_TEXT, reply_markup: MAIN_KB };
     case '/id':
-      return `👤 حسابك:\n\n🆔 معرف الدردشة: ${chatId}\n🙍 الاسم: ${user.username}\n📛 الحالة: ${user.blocked ? '🚫 محظور' : '✅ نشط'}${isAdmin(user) ? '\n👑 الصلاحية: مدير' : ''}`;
-    case '/ping':
-      return `🏓 Pong!\n⚡ البوت يعمل | الإصدار v${APP_VERSION}`;
-    case '/version':
-      return `📦 Claw Office AI v${APP_VERSION}\n⏱ مدة التشغيل: ${up}\n🟢 Node.js: ${process.version}`;
-
-    // ─── المعلومات ───
+      return `🆔 معرفك: ${user.id}\n👤 المستخدم: ${user.username || 'بدون'}\n🔐 الصلاحية: ${requireAdmin(user) ? 'مدير 👑' : 'مستخدم مصرّح ✅'}`;
+    case '/ping': return `🏓 بونغ! (${Date.now() - now}ms)`;
+    case '/version': return `🤖 Claw Office AI — الإصدار v${APP_VERSION}\n⏱ مدة التشغيل: ${Math.floor((Date.now() - BOT_START) / 60000)} دقيقة`;
     case '/stats': {
-      const ready = db.tasks.filter(t => t.status === 'READY').length;
-      const blocked = db.users.filter(u => u.blocked).length;
-      return `📊 إحصائيات المكتب:\n\n🧾 العملاء: ${db.clients.length}\n✅ المهام: ${db.tasks.length} (جاهز: ${ready})\n👥 المستخدمون: ${db.users.length} (محظور: ${blocked})\n📜 السجلات: ${db.logs.length}\n🤖 دقة الذكاء الاصطناعي: 98.5%`;
+      const today = new Date().toDateString();
+      return `📊 الإحصائيات:\n🧾 العملاء: ${db.clients.length}\n✅ المهام: ${db.tasks.filter(t => !t.done).length} نشطة / ${db.tasks.length} إجمالي\n👥 المستخدمون: ${db.users.length}\n⏰ تذكيرات قادمة: ${db.reminders.filter(r => !r.sent).length}\n📜 سجلات اليوم: ${db.logs.filter(l => new Date(l.at).toDateString() === today).length}\n🔔 مدة التذكير: ${db.settings.reminderHours} ساعة`;
     }
     case '/report': {
-      const ready = db.tasks.filter(t => t.status === 'READY').length;
-      const proc = db.tasks.filter(t => t.status === 'PROCESSING').length;
-      const missing = db.tasks.filter(t => t.status === 'MISSING_INFO').length;
-      const blocked = db.users.filter(u => u.blocked).length;
-      const errors = db.logs.filter(l => l.level === 'ERROR').length;
-      return `📋 تقرير Claw Office AI الشامل\n⏱ ${new Date().toLocaleString('ar')} | مدة التشغيل: ${up}\n\n🧾 العملاء: ${db.clients.length}\n✅ المهام: ${db.tasks.length}\n   ⏳ قيد المعالجة: ${proc}\n   ⚠️ ناقصة: ${missing}\n   ✅ جاهزة: ${ready}\n\n👥 المستخدمون: ${db.users.length} (محظور: ${blocked})\n📜 السجلات: ${db.logs.length} (أخطاء: ${errors})\n🌙 Kimi: ${db.settings.kimiApiKey ? '✔ مفعّل' : '✖ غير مفعّل'}\n📦 الإصدار: v${APP_VERSION}`;
+      const p = db.tasks.filter(t => !t.done).slice(0, 8).map(t => `  • ${t.title}${t.due ? ' 📅' + t.due : ''}`).join('\n');
+      return `📋 تقرير المكتب:\n🧾 العملاء: ${db.clients.length} | ✅ مهام نشطة: ${db.tasks.filter(t => !t.done).length}\n⏰ تذكيرات قادمة: ${db.reminders.filter(r => !r.sent).length}\n${p ? '\nالمهام:\n' + p : '\nلا مهام نشطة 🎉'}`;
     }
     case '/logs': {
-      const n = Math.min(Math.max(parseInt(args) || 5, 1), 20);
-      const icons = { INFO: 'ℹ️', SUCCESS: '✅', WARN: '⚠️', ERROR: '❌' };
-      const list = db.logs.slice(0, n).map(l => `${icons[l.level] || '•'} ${l.text}`).join('\n');
-      return `📜 آخر ${n} سجلات:\n\n${list || 'لا توجد سجلات'}`;
+      const logs = db.logs.slice(0, 8).map(l => `${l.level === 'error' ? '🔴' : l.level === 'success' ? '🟢' : l.level === 'warning' ? '🟡' : '🔵'} ${l.text}`).join('\n');
+      return `📜 آخر السجلات:\n${logs || 'لا سجلات بعد'}`;
     }
-
-    // ─── إدارة المهام ───
     case '/tasks': {
-      if (!db.tasks.length) return '📭 لا توجد مهام.\nأضف مهمة: /addtask العنوان | العميل | الموعد';
-      const list = db.tasks.slice(0, 15).map((t, i) =>
-        `${i + 1}. ${STATUS_EMOJI[t.status] || '📌'} ${t.title}\n    👤 ${t.client || '—'} | 📅 ${t.due || '—'}`
-      ).join('\n\n');
-      return `✅ المهام (${db.tasks.length}):\n\n${list}\n\n💡 /done رقم — إنجاز | /deltask رقم — حذف`;
+      const active = db.tasks.filter(t => !t.done);
+      if (!active.length) return { text: '✅ لا مهام نشطة. أضف مهمة: /addtask عنوان | تاريخ | أولوية', reply_markup: MAIN_KB };
+      const text = `✅ المهام النشطة (${active.length}):\n` + active.slice(0, 10).map((t, i) => `${i + 1}. ${t.title}${t.due ? ' 📅' + t.due : ''}${t.priority ? ' [' + t.priority + ']' : ''}`).join('\n');
+      const kb = active.slice(0, 10).map((t, i) => [{ text: '✅ إنجاز ' + (i + 1), callback_data: 'done:' + t.id }, { text: '🗑 حذف ' + (i + 1), callback_data: 'del:' + t.id }]);
+      return { text, reply_markup: { inline_keyboard: kb } };
     }
     case '/addtask': {
-      if (!args) return '📝 الصيغة:\n/addtask العنوان | العميل | الموعد\nمثال: /addtask مراجعة العقد | شركة النور | 15 غشت';
       const parts = args.split('|').map(s => s.trim());
-      const t = { id: Date.now().toString(), title: parts[0], client: parts[1] || '—', due: parts[2] || '—', status: 'PROCESSING' };
-      db.tasks.unshift(t);
-      addLog('SUCCESS', `مهمة جديدة عبر البوت من @${user.username}: ${t.title}`);
-      saveDB();
-      return `✅ تمت إضافة المهمة بنجاح!\n\n📌 ${t.title}\n👤 ${t.client} | 📅 ${t.due}\n⏳ الحالة: قيد المعالجة\n\nتظهر الآن في التطبيق مباشرة.`;
+      if (!parts[0]) return '⚠️ الصيغة: /addtask عنوان | تاريخ | أولوية';
+      db.tasks.unshift({ id: Date.now().toString(), title: parts[0], due: parts[1] || '', priority: parts[2] || 'متوسطة', done: false, createdAt: new Date().toISOString() });
+      saveDB(); addLog('success', '➕ مهمة جديدة عبر البوت: ' + parts[0]);
+      return { text: `✅ تمت إضافة المهمة: ${parts[0]}`, reply_markup: { inline_keyboard: [[{ text: '📋 عرض المهام', callback_data: 'list:tasks' }]] } };
     }
     case '/done': {
-      const i = parseInt(args) - 1;
-      if (isNaN(i) || !db.tasks[i]) return '❌ رقم غير صالح.\nأرسل /tasks لعرض الأرقام.';
-      db.tasks[i].status = 'READY';
-      addLog('SUCCESS', `أنجز @${user.username} المهمة: ${db.tasks[i].title}`);
-      saveDB();
-      return `✅ أُنجزت المهمة:\n${db.tasks[i].title}\n\nتحدّثت في التطبيق فوراً.`;
+      const idx = parseInt(args); const active = db.tasks.filter(t => !t.done);
+      if (!idx || idx < 1 || idx > active.length) return '⚠️ رقم غير صالح. اعرض /tasks لمعرفة الأرقام';
+      active[idx - 1].done = true; saveDB();
+      return `✅ تم إنجاز: ${active[idx - 1].title}`;
     }
     case '/deltask': {
-      const i = parseInt(args) - 1;
-      if (isNaN(i) || !db.tasks[i]) return '❌ رقم غير صالح.\nأرسل /tasks لعرض الأرقام.';
-      const removed = db.tasks.splice(i, 1)[0];
-      addLog('WARN', `حذف @${user.username} المهمة: ${removed.title}`);
-      saveDB();
-      return `🗑 حُذفت المهمة:\n${removed.title}`;
-    }
-
-    // ─── إدارة العملاء ───
-    case '/clients': {
-      if (!db.clients.length) return '📭 لا يوجد عملاء.\nأضف عميلاً: /addclient الاسم | الرقم الوطني';
-      const list = db.clients.slice(0, 15).map((c, i) =>
-        `${i + 1}. 👤 ${c.fullName || 'بدون اسم'}${c.nationalId ? `\n    🪪 ${c.nationalId}` : ''}${c.verified ? ' ✔' : ''}`
-      ).join('\n');
-      return `🧾 العملاء (${db.clients.length}):\n\n${list}`;
+      const idx = parseInt(args); const active = db.tasks.filter(t => !t.done);
+      if (!idx || idx < 1 || idx > active.length) return '⚠️ رقم غير صالح.';
+      const t = active[idx - 1]; db.tasks = db.tasks.filter(x => x.id !== t.id); saveDB();
+      return `🗑 تم حذف: ${t.title}`;
     }
     case '/addclient': {
-      if (!args) return '📝 الصيغة:\n/addclient الاسم | الرقم الوطني\nمثال: /addclient سارة العلوي | AB123456';
       const parts = args.split('|').map(s => s.trim());
-      const c = { id: Date.now().toString(), fullName: parts[0], nationalId: parts[1] || '', verified: false, createdAt: new Date().toISOString() };
-      db.clients.unshift(c);
-      addLog('SUCCESS', `عميل جديد عبر البوت من @${user.username}: ${c.fullName}`);
-      saveDB();
-      return `🧾 تمت إضافة العميل بنجاح!\n\n👤 ${c.fullName}${c.nationalId ? `\n🪪 ${c.nationalId}` : ''}\n\nيظهر الآن في التطبيق وفي البحث العميق.`;
+      if (!parts[0]) return '⚠️ الصيغة: /addclient الاسم | المعرف | الهاتف';
+      const { client, isNew } = upsertClient({ fullName: parts[0], nationalId: parts[1] || '', phone: parts[2] || '', docType: 'إدخال يدوي' }, 'بوت تلغرام 🤖');
+      const rem = scheduleReminder(client, chatId);
+      addLog('success', (isNew ? '🆕 عميل عبر البوت: ' : '🔄 تحديث عميل: ') + parts[0]);
+      return { text: clientCardText(client, isNew, rem), reply_markup: { inline_keyboard: [[{ text: '🧾 عرض العملاء', callback_data: 'list:clients' }], [{ text: '❌ إلغاء التذكير', callback_data: 'cancelrem:' + rem.id }]] } };
     }
-
-    // ─── البحث العميق ───
+    case '/clients': {
+      if (!db.clients.length) return '🧾 لا عملاء بعد. أرسل صورة مستند 📷 أو /addclient';
+      const list = db.clients.slice(0, 12).map((c, i) => `${i + 1}. ${c.fullName || 'بدون اسم'}${c.nationalId ? ' — ' + c.nationalId : ''}${c.phone ? ' 📞' + c.phone : ''}`).join('\n');
+      return { text: `🧾 العملاء (${db.clients.length}):\n${list}`, reply_markup: { inline_keyboard: db.clients.slice(0, 6).map(c => [{ text: '👤 ' + (c.fullName || c.nationalId || 'عميل').slice(0, 28), callback_data: 'client:' + c.id }]) } };
+    }
+    case '/reminders': {
+      const pend = db.reminders.filter(r => !r.sent);
+      const sent = db.reminders.filter(r => r.sent).slice(0, 3);
+      let text = `⏰ التذكيرات:\n🔔 مدة التذكير الحالية: ${db.settings.reminderHours} ساعة (تُغيَّر من إعدادات التطبيق)\n\n`;
+      text += pend.length ? 'القادمة:\n' + pend.slice(0, 8).map((r, i) => `${i + 1}. 🧾 ${r.clientName} — متبقٍ ${Math.max(1, Math.round((r.at - Date.now()) / 60000))} دقيقة`).join('\n') : 'لا تذكيرات قادمة';
+      if (sent.length) text += '\n\nالمرسلة مؤخراً:\n' + sent.map(r => `✔️ ${r.clientName}`).join('\n');
+      return { text, reply_markup: pend.length ? { inline_keyboard: pend.slice(0, 5).map((r, i) => [{ text: '❌ إلغاء تذكير ' + r.clientName.slice(0, 20), callback_data: 'cancelrem:' + r.id }]) } : MAIN_KB };
+    }
+    case '/cancelreminder': {
+      const idx = parseInt(args); const pend = db.reminders.filter(r => !r.sent);
+      if (!idx || idx < 1 || idx > pend.length) return '⚠️ رقم غير صالح. اعرض /reminders';
+      const r = pend[idx - 1]; db.reminders = db.reminders.filter(x => x.id !== r.id); saveDB();
+      return `❌ تم إلغاء تذكير: ${r.clientName}`;
+    }
     case '/search': {
-      if (!args) return '🔍 الصيغة: /search كلمة البحث';
-      const q = args.toLowerCase();
-      const results = [];
-      db.clients.forEach(c => {
-        if (JSON.stringify(c).toLowerCase().includes(q)) results.push(`🧾 عميل: ${c.fullName || ''}${c.nationalId ? ` — ${c.nationalId}` : ''}`);
-      });
-      db.tasks.forEach(t => {
-        if (JSON.stringify(t).toLowerCase().includes(q)) results.push(`✅ مهمة: ${t.title} (${STATUS_TEXT[t.status] || t.status})`);
-      });
-      if (!results.length) return `🔍 لا نتائج عن «${args}»`;
-      return `🔍 نتائج البحث عن «${args}» (${results.length}):\n\n${results.slice(0, 15).join('\n')}`;
+      if (!args.trim()) return '⚠️ الصيغة: /search كلمة';
+      const q = args.trim().toLowerCase();
+      const cHits = db.clients.filter(c => JSON.stringify(c).toLowerCase().includes(q)).slice(0, 5)
+        .map(c => `🧾 ${c.fullName || ''}${c.nationalId ? ' — ' + c.nationalId : ''}`);
+      const tHits = db.tasks.filter(t => JSON.stringify(t).toLowerCase().includes(q)).slice(0, 5)
+        .map(t => `${t.done ? '✅' : '⏳'} ${t.title}`);
+      return `🔍 نتائج البحث عن "${args.trim()}":\n${[...cHits, ...tHits].join('\n') || 'لا نتائج'}`;
     }
-
-    // ─── المستخدمون والأمان ───
     case '/users': {
-      if (!db.users.length) return '📭 لا يوجد مستخدمون.';
-      const list = db.users.slice(0, 15).map(u =>
-        `${u.blocked ? '🚫' : '✅'} ${u.handle || u.username} — #${u.id}${isAdmin(u) ? ' 👑' : ''}`
-      ).join('\n');
-      return `👥 المستخدمون (${db.users.length}):\n\n${list}\n\n💡 /block رقم | /unblock رقم (للمدير)`;
+      if (!requireAdmin(user)) return '⛔ للمدير فقط';
+      return `👥 المستخدمون:\n` + (db.users.map(u => `${u.id} — ${u.username || 'بدون'} ${u.blocked ? '🚫' : u.authed ? '✅' : '🔒'}${db.settings.adminId === u.id ? ' 👑' : ''}`).join('\n') || 'لا مستخدمين');
     }
     case '/admin': {
-      if (!db.settings.adminId) {
-        db.settings.adminId = user.id;
-        saveDB();
-        addLog('SUCCESS', `👑 @${user.username} أصبح مدير النظام`);
-        return '👑 مبروك! أنت الآن مدير النظام.\nيمكنك استخدام /block و /unblock و /broadcast';
-      }
-      if (isAdmin(user)) return '👑 أنت مدير النظام بالفعل.';
-      return '🔒 يوجد مدير مسجّل بالفعل.';
+      if (!db.settings.adminId) { db.settings.adminId = user.id; saveDB(); return '👑 تم تعيينك مديراً للبوت!'; }
+      return requireAdmin(user) ? '👑 أنت المدير بالفعل' : '⛔ يوجد مدير آخر';
     }
     case '/block': {
-      const deny = requireAdmin(user); if (deny) return deny;
-      const target = db.users.find(u => u.id == args);
-      if (!target) return '❌ مستخدم غير موجود.\nأرسل /users لعرض الأرقام.';
-      target.blocked = true; target.status = 'BLOCKED';
-      addLog('ERROR', `المدير @${user.username} حظر ${target.handle}`);
-      saveDB();
-      return `🚫 تم حظر ${target.handle}\nلن يستطيع استخدام البوت بعد الآن.`;
+      if (!requireAdmin(user)) return '⛔ للمدير فقط';
+      const t = db.users.find(u => u.id === parseInt(args)); if (!t) return '⚠️ مستخدم غير موجود';
+      t.blocked = true; saveDB(); return `🚫 تم حظر ${t.username || t.id}`;
     }
     case '/unblock': {
-      const deny = requireAdmin(user); if (deny) return deny;
-      const target = db.users.find(u => u.id == args);
-      if (!target) return '❌ مستخدم غير موجود.';
-      target.blocked = false; target.status = 'ACTIVE';
-      addLog('SUCCESS', `المدير @${user.username} ألغى حظر ${target.handle}`);
-      saveDB();
-      return `✅ تم إلغاء حظر ${target.handle}`;
+      if (!requireAdmin(user)) return '⛔ للمدير فقط';
+      const t = db.users.find(u => u.id === parseInt(args)); if (!t) return '⚠️ مستخدم غير موجود';
+      t.blocked = false; saveDB(); return `✅ تم إلغاء حظر ${t.username || t.id}`;
     }
-
-    // ─── الإشعارات ───
     case '/broadcast': {
-      const deny = requireAdmin(user); if (deny) return deny;
-      if (!args) return '📣 الصيغة: /broadcast نص الرسالة';
-      const targets = db.users.filter(u => !u.blocked && typeof u.id === 'number' && u.id > 1000);
-      let sent = 0, failed = 0;
-      for (const u of targets) {
-        const r = await tgCall(token, 'sendMessage', { chat_id: u.id, text: `📣 رسالة من الإدارة:\n\n${args}` });
-        if (r.ok) sent++; else failed++;
-      }
-      addLog('INFO', `بثّ @${user.username} رسالة إلى ${sent} مستخدم`);
-      return `📣 تم البث!\n✔ وصلت: ${sent}\n✖ فشلت: ${failed}`;
+      if (!requireAdmin(user)) return '⛔ للمدير فقط';
+      if (!args.trim()) return '⚠️ الصيغة: /broadcast رسالتك';
+      let sent = 0;
+      for (const u of db.users.filter(u => !u.blocked && u.authed)) { try { await tgCall(token, 'sendMessage', { chat_id: u.id, text: '📢 ' + args }); sent++; } catch (e) {} }
+      return `📢 تم الإرسال إلى ${sent} مستخدم`;
     }
     case '/notify': {
-      if (!args) return '🔔 الصيغة: /notify نص الإشعار';
-      addLog('WARN', `🔔 إشعار من @${user.username}: ${args}`);
-      return `🔔 تم تسجيل الإشعار في سجلات التطبيق:\n«${args}»\n\nسيظهر في صفحة السجلات فوراً.`;
+      if (!requireAdmin(user)) return '⛔ للمدير فقط';
+      addLog('warning', '🔔 تنبيه من المدير: ' + args); saveDB();
+      return '🔔 تم إرسال التنبيه إلى لوحة التحكم';
     }
-
-    default:
-      return null;
+    case '/newtoken': {
+      if (!requireAdmin(user)) return '⛔ للمدير فقط';
+      db.settings.accessToken = 'COA-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+      db.users.forEach(u => u.authed = false); user.authed = true; saveDB();
+      addLog('warning', '🔐 تم توليد رمز أمان جديد — أُلغيت كل الجلسات');
+      return '🔐 رمز جديد: ' + db.settings.accessToken + '\n⚠️ أُلغيت صلاحيات الجميع. شارك الرمز الجديد فقط مع من تثق به.';
+    }
+    default: return { text: '❓ أمر غير معروف. اختر من الأزرار:', reply_markup: MAIN_KB };
   }
 }
 
-async function botTick() {
-  const token = db.settings.telegramBotToken;
-  if (!token) return;
-  try {
-    const r = await tgCall(token, 'getUpdates', { offset: lastUpdateId + 1, limit: 20, timeout: 0 });
-
-    if (!r.ok) {
-      const desc = r.description || 'خطأ غير معروف';
-      if (String(desc).includes('409')) {
-        // تعارض: Webhook أو جلسة polling أخرى — نصلحه ونستمر
-        addLog('WARN', `البوت: تعارض 409 — إصلاح تلقائي (حذف Webhook)`);
-        await botFixWebhook(token);
-        botFailCount = 0;
-        return;
-      }
-      if (r.error_code === 401) {
-        addLog('ERROR', `البوت: رمز غير صالح — تم إيقاف المحرك. أدخل رمزاً صحيحاً من @BotFather`);
-        console.log('❌ البوت: رمز تلغرام غير صالح — توقف المحرك');
-        stopBot();
-        return;
-      }
-      botFailCount++;
-      addLog('ERROR', `البوت: فشل الجلب (${botFailCount}) — ${desc}`);
-      if (botFailCount >= 10) { addLog('ERROR', 'البوت: كثرة الأخطاء — توقف المحرك'); stopBot(); }
-      return;
-    }
-    botFailCount = 0;
-
-    for (const u of r.result) {
-      lastUpdateId = Math.max(lastUpdateId, u.update_id);
-      const msg = u.message;
-      if (!msg || !msg.text) continue;
-      const chatId = msg.chat.id;
-      const username = msg.from.username || msg.from.first_name || 'مجهول';
-      const text = msg.text.trim();
-
-      // تسجيل المستخدم
-      let user = db.users.find(x => x.id === msg.from.id);
-      if (!user) {
-        user = { id: msg.from.id, username, handle: '@' + username, status: 'ACTIVE', blocked: false, last: 'الآن' };
-        db.users.unshift(user);
-        addLog('SUCCESS', `مستخدم جديد انضم للبوت: @${username} (${chatId})`);
-        console.log(`👤 مستخدم جديد: @${username} (${chatId})`);
-      }
-      user.last = 'الآن';
-      user.username = username;
-
-      // الحظر التلقائي للمجهولين
-      if (user.blocked) { addLog('ERROR', `تم تجاهل رسالة من محظور: @${username}`); continue; }
-      addLog('INFO', `رسالة من @${username}: ${text.slice(0, 60)}`);
-      console.log(`📩 @${username}: ${text.slice(0, 60)}`);
-
-      // استخراج الأمر ومعطياته (يدعم /cmd@BotName)
-      const firstSpace = text.indexOf(' ');
-      const rawCmd = (firstSpace === -1 ? text : text.slice(0, firstSpace));
-      const cmd = rawCmd.split('@')[0].toLowerCase();
-      const args = firstSpace === -1 ? '' : text.slice(firstSpace + 1).trim();
-
-      let reply = null;
-      if (text.startsWith('/')) {
-        reply = await handleCommand(token, cmd, args, user, chatId);
-        if (reply === null) reply = `❓ أمر غير معروف: ${cmd}\nأرسل /help لعرض الأوامر.`;
-        else addLog('SUCCESS', `نُفّذ الأمر ${cmd} بواسطة @${username}`);
-      }
-
-      if (reply === null) {
-        // رد ذكي عبر Kimi أو رسالة افتراضية
-        if (db.settings.kimiApiKey) {
-          const ai = await kimiChat(db.settings.kimiApiKey, db.settings.kimiModel, text);
-          reply = ai.choices?.[0]?.message?.content || 'عذراً، لم أستطع الرد الآن.';
-          addLog('SUCCESS', `رد ذكي (Kimi) على @${username}`);
-        } else {
-          reply = '🤖 استلمت رسالتك.\nفعّل مفتاح Kimi من الإعدادات للردود الذكية، أو أرسل /help للأوامر.';
-        }
-      }
-
-      const sent = await tgCall(token, 'sendMessage', { chat_id: chatId, text: reply });
-      if (sent.ok) console.log(`📤 رد على @${username} ✔`);
-      else addLog('ERROR', `البوت: فشل إرسال الرد — ${sent.description}`);
-    }
+// ─── Bot update processor (Long Polling) ───
+async function processUpdate(token, u) {
+  // أزرار inline
+  if (u.callback_query) {
+    const cq = u.callback_query;
+    const user = db.users.find(x => x.id === cq.from.id);
+    if (!user || !user.authed || user.blocked) { await tgCall(token, 'answerCallbackQuery', { callback_query_id: cq.id, text: '🔒 غير مصرّح' }); return; }
+    const [act, val] = (cq.data || '').split(':');
+    let msg = '';
+    if (act === 'done') { const t = db.tasks.find(x => x.id === val); if (t) { t.done = true; msg = '✅ تم إنجاز: ' + t.title; } }
+    else if (act === 'del') { const t = db.tasks.find(x => x.id === val); if (t) { db.tasks = db.tasks.filter(x => x.id !== val); msg = '🗑 تم حذف: ' + t.title; } }
+    else if (act === 'cancelrem') { const r = db.reminders.find(x => x.id === val); if (r) { db.reminders = db.reminders.filter(x => x.id !== val); msg = '❌ أُلغي تذكير: ' + r.clientName; } }
+    else if (act === 'client') { const c = db.clients.find(x => x.id === val); if (c) msg = clientCardText(c, false, null); }
+    else if (act === 'list' && val === 'tasks') { msg = 'استعمل زر ✅ المهام'; }
+    else if (act === 'list' && val === 'clients') { msg = 'استعمل زر 🧾 العملاء'; }
     saveDB();
+    await tgCall(token, 'answerCallbackQuery', { callback_query_id: cq.id, text: msg.slice(0, 180) || 'تم ✅' });
+    if (msg && (act === 'client')) await botReply(token, cq.message.chat.id, msg);
+    return;
+  }
+  const msg = u.message;
+  if (!msg) return;
+
+  // تسجيل المستخدم
+  let user = db.users.find(x => x.id === msg.from.id);
+  if (!user) {
+    user = { id: msg.from.id, username: msg.from.username || msg.from.first_name || 'user', blocked: false, authed: false, lastSeen: new Date().toISOString(), messages: 0 };
+    db.users.unshift(user); saveDB();
+    addLog('system', '👤 مستخدم تلغرام جديد: ' + user.username);
+  }
+  user.lastSeen = new Date().toISOString(); user.messages++;
+  const chatId = msg.chat.id;
+  if (user.blocked) { await botReply(token, chatId, '🚫 أنت محظور من استعمال هذا البوت.'); return; }
+
+  // المصادقة بالرمز
+  const text = (msg.text || '').trim();
+  if (!user.authed) {
+    if (text.startsWith('/auth')) {
+      const tok = text.split(/\s+/)[1] || '';
+      if (tok && tok === db.settings.accessToken) {
+        user.authed = true; saveDB();
+        addLog('success', '🔐 تفعيل وصول: ' + user.username);
+        await botReply(token, chatId, { text: '🔓 تم تفعيل وصولك بنجاح!\nيمكنك الآن استعمال كل وظائف البوت — أرسل صورة مستند 📷 وسأستخرج بياناته وأنشئ ملف عميل مع تذكير تلقائي.', reply_markup: MAIN_KB });
+      } else {
+        addLog('warning', '🔒 محاولة دخول برمز خاطئ من ' + user.username);
+        await botReply(token, chatId, '❌ رمز غير صحيح.\nانسخ الرمز من إعدادات التطبيق (🔐 رمز أمان البوت) وأرسله هكذا:\n/auth الرمز');
+      }
+    } else {
+      await botReply(token, chatId, '🔒 هذا البوت محمي.\nللوصول أرسل:\n/auth رمز-الدخول\n\nستجد الرمز في التطبيق ← الإعدادات ← رمز أمان البوت 🔐');
+    }
+    return;
+  }
+
+  // 📷 استقبال صورة → OCR → عميل + تذكير
+  if (msg.photo) {
+    await botReply(token, chatId, '⏳ جارٍ تحليل الصورة بالذكاء الاصطناعي...');
+    try {
+      const fileId = msg.photo[msg.photo.length - 1].file_id;
+      const f = await tgCall(token, 'getFile', { file_id: fileId });
+      if (!f.ok) throw new Error('تعذر جلب الملف');
+      const url = `https://api.telegram.org/file/bot${token}/${f.result.file_path}`;
+      const buf = Buffer.from(await (await fetch(url)).arrayBuffer());
+      const { client, isNew, reminder } = await processImageToClient(buf.toString('base64'), 'image/jpeg', 'بوت تلغرام 📷', chatId);
+      await botReply(token, chatId, { text: clientCardText(client, isNew, reminder), reply_markup: { inline_keyboard: [[{ text: '👤 عرض الملف', callback_data: 'client:' + client.id }], [{ text: '❌ إلغاء التذكير', callback_data: 'cancelrem:' + reminder.id }]] } });
+    } catch (e) {
+      addLog('error', '📷 فشل تحليل صورة: ' + e.message);
+      await botReply(token, chatId, '❌ ' + e.message);
+    }
+    return;
+  }
+  if (!text) return;
+
+  // الأزرار والإجراءات المعلقة
+  if (pending.has(user.id) && !text.startsWith('/')) {
+    const p = pending.get(user.id); pending.delete(user.id);
+    const reply = await handleCommand(token, p.action === 'search' ? '/search' : '/addclient', text, user, chatId);
+    await botReply(token, chatId, reply); return;
+  }
+  if (text === '🔍 بحث') { pending.set(user.id, { action: 'search' }); await botReply(token, chatId, '🔎 أرسل كلمة البحث:'); return; }
+  if (text === '➕ إضافة عميل') { pending.set(user.id, { action: 'addclient' }); await botReply(token, chatId, '📝 أرسل بالصيغة:\nالاسم | المعرف | الهاتف'); return; }
+  const mapped = BTN[text];
+
+  // تنفيذ الأمر
+  const parts = text.split(' ');
+  const cmd = (mapped || parts[0].split('@')[0]).toLowerCase();
+  const args = mapped ? '' : parts.slice(1).join(' ');
+  const t0 = Date.now();
+  try {
+    const reply = await handleCommand(token, cmd, args, user, chatId);
+    const ms = Date.now() - t0;
+    await botReply(token, chatId, typeof reply === 'string' ? { text: reply, reply_markup: MAIN_KB } : reply);
+    addLog('system', `🤖 ${cmd} من ${user.username} (${ms}ms)`);
   } catch (e) {
-    addLog('ERROR', `البوت: خطأ شبكة — ${e.message}`);
-    console.log(`🌐 البوت: خطأ شبكة — ${e.message}`);
+    addLog('error', `❌ خطأ في ${cmd}: ${e.message}`);
+    await botReply(token, chatId, '❌ حدث خطأ: ' + e.message);
+  }
+}
+
+async function botFixWebhook(token) {
+  try {
+    const info = await tgCall(token, 'getWebhookInfo', {});
+    if (info.ok && info.result && info.result.url) {
+      await tgCall(token, 'deleteWebhook', { drop_pending_updates: true });
+      addLog('system', '🔧 تم حذف webhook قديم كان يمنع استقبال الرسائل');
+    }
+  } catch (e) { addLog('warning', '⚠️ تعذر فحص webhook: ' + e.message); }
+}
+
+async function botLoop(token) {
+  while (botRunning) {
+    try {
+      const r = await tgCall(token, 'getUpdates', { offset: lastUpdateId + 1, limit: 50, timeout: 25 });
+      if (!r.ok) {
+        botFailCount++;
+        if (r.error_code === 409) { await botFixWebhook(token); lastUpdateId = -1; }
+        if (r.error_code === 401) { addLog('error', '❌ توكن بوت تلغرام غير صالح!'); stopBot(); break; }
+        if (botFailCount >= 3) addLog('warning', `⚠️ البوت يواجه مشاكل (${r.error_code || 'شبكة'})`);
+        await sleep(3000); continue;
+      }
+      botFailCount = 0;
+      for (const u of r.result || []) {
+        if (u.update_id > lastUpdateId) lastUpdateId = u.update_id;
+        try { await processUpdate(token, u); } catch (e) { addLog('error', '❌ خطأ معالجة: ' + e.message); }
+      }
+    } catch (e) { await sleep(3000); }
   }
 }
 
 async function startBot() {
-  if (botTimer) return { already: true };
+  if (botRunning || !db.settings.telegramBotToken) return;
+  botRunning = true; lastUpdateId = -1; botFailCount = 0;
   const token = db.settings.telegramBotToken;
-  if (!token) return { error: 'لا يوجد رمز' };
-  // 1) حذف أي Webhook قديم يمنع استقبال الرسائل
-  await botFixWebhook(token);
-  // 2) التحقق من هوية البوت
   try {
-    const me = await tgCall(token, 'getMe');
-    if (!me.ok) return { error: me.description || 'رمز غير صالح' };
-    addLog('SUCCESS', `تم تشغيل محرك البوت @${me.result.username} — يرد تلقائياً على الرسائل`);
-    console.log(`🤖 محرك البوت يعمل: @${me.result.username} — أرسل /start في تلغرام`);
-    botTimer = setInterval(botTick, 3000);
-    botTick(); // جلب فوري أول مرة
-    return { ok: true, username: me.result.username };
-  } catch (e) {
-    addLog('ERROR', `البوت: تعذر التشغيل — ${e.message}`);
-    return { error: e.message };
-  }
+    await botFixWebhook(token);
+    const me = await tgCall(token, 'getMe', {});
+    if (me.ok) addLog('success', `🤖 بوت تلغرام متصل (Long Polling): @${me.result.username}`);
+    else if (me.error_code === 401) { addLog('error', '❌ توكن بوت تلغرام غير صالح!'); stopBot(); return; }
+  } catch (e) { addLog('warning', '⚠️ مشكلة اتصال بتلغرام: ' + e.message); }
+  addLog('system', '🤖 بدأ بوت تلغرام (وضع سريع)');
+  botLoop(token);
 }
-function stopBot() {
-  if (botTimer) { clearInterval(botTimer); botTimer = null; }
-  addLog('WARN', 'تم إيقاف محرك البوت');
-  console.log('⏹ محرك البوت متوقف');
+function stopBot() { botRunning = false; addLog('system', '⏹️ توقف بوت تلغرام'); }
+
+// ─── Reminder engine ───
+setInterval(async () => {
+  const due = db.reminders.filter(r => !r.sent && r.at <= Date.now());
+  if (!due.length) return;
+  const token = db.settings.telegramBotToken;
+  for (const r of due) {
+    const c = db.clients.find(x => x.id === r.clientId);
+    const text = `⏰ تذكير بملف عميل!\n\n🧾 ${r.clientName}${c && c.nationalId ? '\n🆔 ' + c.nationalId : ''}${c && c.phone ? '\n📞 ' + c.phone : ''}\n📄 ${(c && c.docType) || ''}\n\nتم إنشاء/تحديث هذا الملف قبل ${r.hours} ساعة — تفقد ملفه في التطبيق.`;
+    const targets = r.chatId ? [r.chatId] : db.users.filter(u => u.authed && !u.blocked).map(u => u.id);
+    if (token) for (const cid of targets) { try { await tgCall(token, 'sendMessage', { chat_id: cid, text }); } catch (e) {} }
+    r.sent = true;
+    addLog('warning', '⏰ أُرسل تذكير بملف: ' + r.clientName);
+  }
+  saveDB();
+}, 30000);
+
+// ─── Static ───
+const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
+
+// ─── Kimi chat ───
+async function kimiChat(apiKey, model, message) {
+  const payload = { model, messages: [{ role: 'system', content: 'أنت مساعد Claw Office AI الذكي، تجيب بالعربية باختصار ومهنية.' }, { role: 'user', content: message }], temperature: 0.6 };
+  const hosts = ['https://api.moonshot.ai/v1/chat/completions', 'https://api.moonshot.cn/v1/chat/completions'];
+  let lastErr = '';
+  for (const url of hosts) {
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey }, body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || ('HTTP ' + res.status));
+      return { reply: data.choices?.[0]?.message?.content || 'لا رد' };
+    } catch (e) { lastErr = e.message; }
+  }
+  throw new Error(lastErr);
 }
 
-// ─── واجهات API ───
-async function handleAPI(req, res, pathname, body) {
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  const send = (obj, code = 200) => { res.writeHead(code); res.end(JSON.stringify(obj)); };
-
-  if (req.method === 'GET' && pathname === '/api/version') {
-    return send({ version: APP_VERSION, name: 'Claw Office AI' });
-  }
-  if (req.method === 'GET' && pathname === '/api/stats') {
-    return send({
-      learning: 85, knowledge: '1.2 تيرابايت', aiAccuracy: 98.5,
-      messagesToday: 1245, activeUsers: 328,
-      clients: db.clients.length, tasks: db.tasks.length,
+// ─── API ───
+async function handleAPI(req, res, url) {
+  const p = url.pathname;
+  const json = (d, code = 200) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(d)); };
+  if (req.method === 'GET' && p === '/api/health') return json({ ok: true, version: APP_VERSION });
+  if (req.method === 'GET' && p === '/api/version') return json({ version: APP_VERSION });
+  if (req.method === 'GET' && p === '/api/stats') {
+    const today = new Date().toDateString();
+    return json({
+      messagesToday: db.logs.filter(l => new Date(l.at).toDateString() === today).length,
+      activeUsers: db.users.filter(u => !u.blocked).length,
+      clients: db.clients.length,
+      pendingTasks: db.tasks.filter(t => !t.done).length,
+      tasks: db.tasks.length,
+      pendingReminders: db.reminders.filter(r => !r.sent).length,
+      dataSize: (fs.existsSync(DB_FILE) ? fs.statSync(DB_FILE).size : 0),
+      learning: 85
     });
   }
-  if (req.method === 'GET' && pathname === '/api/tasks') return send(db.tasks);
-  if (req.method === 'POST' && pathname === '/api/tasks') {
-    const t = { id: Date.now().toString(), status: 'PROCESSING', ...body };
-    db.tasks.unshift(t); addLog('INFO', `تمت إضافة مهمة: ${t.title}`); saveDB();
-    return send(t, 201);
+  if (req.method === 'GET' && p === '/api/tasks') return json(db.tasks);
+  if (req.method === 'GET' && p === '/api/clients') return json(db.clients);
+  if (req.method === 'GET' && p === '/api/clients/latest') return json(db.clients[0] || null);
+  if (req.method === 'GET' && p === '/api/logs') return json(db.logs.slice(0, 50));
+  if (req.method === 'GET' && p === '/api/users') return json(db.users.map(u => ({ id: u.id, username: u.username, blocked: u.blocked, authed: u.authed, lastSeen: u.lastSeen })));
+  if (req.method === 'GET' && p === '/api/reminders') return json(db.reminders.slice(0, 50));
+  if (req.method === 'GET' && p === '/api/settings') return json({ ...db.settings, hasKimiKey: !!db.settings.kimiApiKey, kimiApiKey: db.settings.kimiApiKey ? '••••' + db.settings.kimiApiKey.slice(-4) : '' });
+  if (req.method === 'POST' && p === '/api/settings') {
+    const b = await readBody(req);
+    if (b.telegramBotToken) { const changed = b.telegramBotToken !== db.settings.telegramBotToken; db.settings.telegramBotToken = b.telegramBotToken; if (changed) { stopBot(); setTimeout(startBot, 500); } }
+    if (b.kimiApiKey) db.settings.kimiApiKey = b.kimiApiKey;
+    if (b.kimiModel) db.settings.kimiModel = b.kimiModel;
+    if (b.reminderHours !== undefined && !isNaN(parseFloat(b.reminderHours))) db.settings.reminderHours = Math.min(168, Math.max(0.25, parseFloat(b.reminderHours)));
+    saveDB(); addLog('system', '⚙️ تم تحديث الإعدادات'); return json({ ok: true });
   }
-  if (req.method === 'GET' && pathname === '/api/users') return send(db.users);
-  if (req.method === 'POST' && pathname === '/api/users/toggle-block') {
-    const u = db.users.find(x => x.id === body.id);
-    if (!u) return send({ error: 'المستخدم غير موجود' }, 404);
-    u.blocked = !u.blocked; u.status = u.blocked ? 'BLOCKED' : 'ACTIVE';
-    addLog(u.blocked ? 'ERROR' : 'SUCCESS', `${u.blocked ? 'تم حظر' : 'تم إلغاء حظر'} المستخدم ${u.handle}`);
-    saveDB(); return send(u);
+  if (req.method === 'POST' && p === '/api/token/regen') {
+    db.settings.accessToken = 'COA-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+    db.users.forEach(u => u.authed = false); saveDB();
+    addLog('warning', '🔐 رمز أمان جديد من التطبيق — أُلغيت كل جلسات البوت');
+    return json({ ok: true, token: db.settings.accessToken });
   }
-  if (req.method === 'GET' && pathname === '/api/logs') return send(db.logs);
-  if (req.method === 'GET' && pathname === '/api/clients') return send(db.clients);
-  if (req.method === 'POST' && pathname === '/api/clients') {
-    const c = { id: Date.now().toString(), verified: false, createdAt: new Date().toISOString(), ...body };
-    db.clients.unshift(c); addLog('SUCCESS', `تمت إضافة عميل: ${c.fullName}`); saveDB();
-    return send(c, 201);
-  }
-  if (req.method === 'GET' && pathname === '/api/settings') return send(db.settings);
-  if (req.method === 'POST' && pathname === '/api/settings') {
-    db.settings = { ...db.settings, ...body }; saveDB();
-    addLog('INFO', 'تم تحديث الإعدادات'); return send(db.settings);
-  }
-  if (req.method === 'POST' && pathname === '/api/search') {
-    const q = (body.q || '').toLowerCase();
-    const results = [];
-    db.clients.forEach(c => {
-      if (JSON.stringify(c).toLowerCase().includes(q)) results.push({ type: 'عميل', name: c.fullName, detail: c.nationalId || '', time: c.createdAt });
-    });
-    db.tasks.forEach(t => {
-      if (JSON.stringify(t).toLowerCase().includes(q)) results.push({ type: 'مهمة', name: t.title, detail: t.client, time: t.due });
-    });
-    return send(results);
-  }
-  // ─── تلغرام ───
-  if (req.method === 'POST' && pathname === '/api/telegram/test') {
-    const token = body.token || db.settings.telegramBotToken;
-    if (!token) { addLog('WARN', 'تلغرام: لم يتم إدخال رمز البوت'); return send({ ok: false, error: 'أدخل رمز البوت أولاً' }, 400); }
-    try {
-      const r = await tgCall(token, 'getMe');
-      if (r.ok) { addLog('SUCCESS', `تلغرام: تم الاتصال بالبوت @${r.result.username}`); return send({ ok: true, bot: r.result }); }
-      addLog('ERROR', `تلغرام: فشل الاتصال — ${r.description}`);
-      return send({ ok: false, error: r.description }, 401);
-    } catch (e) { addLog('ERROR', `تلغرام: خطأ شبكة — ${e.message}`); return send({ ok: false, error: e.message }, 500); }
-  }
-  if (req.method === 'POST' && pathname === '/api/telegram/send') {
-    const token = body.token || db.settings.telegramBotToken;
-    if (!token || !body.chatId || !body.text) return send({ ok: false, error: 'الرمز ومعرف الدردشة والنص مطلوبة' }, 400);
-    try {
-      const r = await tgCall(token, 'sendMessage', { chat_id: body.chatId, text: body.text });
-      if (r.ok) { addLog('SUCCESS', `تلغرام: تم إرسال رسالة إلى ${body.chatId}`); return send({ ok: true, result: r.result }); }
-      addLog('ERROR', `تلغرام: فشل الإرسال — ${r.description}`);
-      return send({ ok: false, error: r.description }, 400);
-    } catch (e) { addLog('ERROR', `تلغرام: خطأ شبكة — ${e.message}`); return send({ ok: false, error: e.message }, 500); }
-  }
-  if (req.method === 'GET' && pathname === '/api/telegram/updates') {
+  if (req.method === 'POST' && p === '/api/bot/restart') { stopBot(); setTimeout(startBot, 1000); return json({ ok: true, message: 'جارٍ إعادة تشغيل البوت...' }); }
+  if (req.method === 'POST' && p === '/api/telegram/test') {
     const token = db.settings.telegramBotToken;
-    if (!token) { addLog('WARN', 'تلغرام: احفظ رمز البوت في الإعدادات أولاً'); return send({ ok: false, error: 'احفظ رمز البوت أولاً (زر اختبار الاتصال يحفظه)' }, 400); }
-    try {
-      const r = await tgCall(token, 'getUpdates', { limit: 10 });
-      if (r.ok) {
-        const msgs = r.result.map(u => ({
-          from: u.message?.from?.username || u.message?.from?.first_name || 'مجهول',
-          chatId: u.message?.chat?.id,
-          text: u.message?.text || '(غير نصية)',
-          date: u.message?.date ? new Date(u.message.date * 1000).toLocaleString('ar') : '',
-        })).reverse();
-        addLog('INFO', `تلغرام: تم جلب ${msgs.length} رسالة`);
-        return send({ ok: true, messages: msgs });
-      }
-      addLog('ERROR', `تلغرام: فشل جلب الرسائل — ${r.description}`);
-      return send({ ok: false, error: r.description }, 400);
-    } catch (e) { addLog('ERROR', `تلغرام: خطأ شبكة — ${e.message}`); return send({ ok: false, error: e.message }, 500); }
+    if (!token) return json({ ok: false, error: 'أدخل رمز البوت أولاً' }, 400);
+    try { const me = await tgCall(token, 'getMe', {}); if (me.ok) return json({ ok: true, bot: me.result }); return json({ ok: false, error: me.description || 'توكن غير صالح' }); }
+    catch (e) { return json({ ok: false, error: e.message }); }
   }
-  if (req.method === 'POST' && pathname === '/api/telegram/bot') {
-    const token = body.token || db.settings.telegramBotToken;
-    if (!token) return send({ ok: false, error: 'أدخل رمز البوت أولاً' }, 400);
-    if (body.action === 'start') {
-      db.settings.telegramBotToken = token; saveDB();
-      const r = await startBot();
-      if (r.error) return send({ ok: false, error: r.error }, 400);
-      return send({ ok: true, running: true, username: r.username });
+  if (req.method === 'POST' && p === '/api/telegram/send') {
+    const b = await readBody(req);
+    const token = db.settings.telegramBotToken;
+    if (!token) return json({ ok: false, error: 'أدخل رمز البوت أولاً' }, 400);
+    if (!b.chatId || !b.text) return json({ ok: false, error: 'معرف الدردشة والنص مطلوبان' }, 400);
+    try { const r = await tgCall(token, 'sendMessage', { chat_id: b.chatId, text: String(b.text).slice(0, 4000) }); if (r.ok) { addLog('success', '📨 رسالة إلى ' + b.chatId); return json({ ok: true }); } return json({ ok: false, error: r.description || 'فشل الإرسال' }); }
+    catch (e) { return json({ ok: false, error: e.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/telegram/updates') {
+    return json({ ok: true, messages: db.users.slice(0, 10).map(u => ({ from: u.username, chatId: u.id, date: timeAgoStr(u.lastSeen) })) });
+  }
+  if (req.method === 'GET' && p === '/api/telegram/bot-status') return json({ running: botRunning });
+  if (req.method === 'POST' && p === '/api/telegram/bot') {
+    const b = await readBody(req);
+    if (b.action === 'start') {
+      if (!db.settings.telegramBotToken) return json({ ok: false, error: 'أدخل رمز البوت واحفظه أولاً' }, 400);
+      stopBot(); setTimeout(startBot, 300); return json({ ok: true });
     }
-    stopBot();
-    return send({ ok: true, running: false });
+    if (b.action === 'stop') { stopBot(); return json({ ok: true }); }
+    return json({ ok: false, error: 'إجراء غير معروف' }, 400);
   }
-  if (req.method === 'GET' && pathname === '/api/telegram/bot-status') {
-    return send({ running: !!botTimer });
+  if (req.method === 'POST' && p === '/api/search') {
+    const b = await readBody(req);
+    const q = String(b.q || '').trim().toLowerCase();
+    if (!q) return json({ results: [] });
+    const results = [];
+    for (const c of db.clients) if (JSON.stringify(c).toLowerCase().includes(q)) results.push({ name: c.fullName || 'عميل', type: 'عميل 🧾', detail: [c.nationalId, c.phone, c.address].filter(Boolean).join(' • ') });
+    for (const t of db.tasks) if (JSON.stringify(t).toLowerCase().includes(q)) results.push({ name: t.title, type: t.done ? 'مهمة ✅' : 'مهمة ⏳', detail: t.due || '' });
+    for (const l of db.logs) if (results.length < 20 && String(l.text).toLowerCase().includes(q)) results.push({ name: l.text, type: 'سجل 📜', detail: l.level });
+    return json({ results: results.slice(0, 20) });
   }
-
-  // ─── Kimi AI ───
-  if (req.method === 'POST' && pathname === '/api/ai/chat') {
-    const key = body.apiKey || db.settings.kimiApiKey;
-    if (!key) { addLog('WARN', 'Kimi: لم يتم إدخال مفتاح API'); return send({ ok: false, error: 'أدخل مفتاح Kimi API في الإعدادات' }, 400); }
+  if (req.method === 'POST' && p === '/api/chat') {
+    const b = await readBody(req);
+    if (!db.settings.kimiApiKey) return json({ error: 'لم يتم ضبط مفتاح Kimi API. أضفه من الإعدادات ⚙️' }, 400);
+    try { const r = await kimiChat(db.settings.kimiApiKey, db.settings.kimiModel || 'kimi-k2.5', b.message); return json(r); }
+    catch (e) { return json({ error: 'خطأ Kimi: ' + e.message }, 500); }
+  }
+  if (req.method === 'POST' && p === '/api/tasks') {
+    const b = await readBody(req);
+    if (!b.title || !String(b.title).trim()) return json({ error: 'العنوان مطلوب' }, 400);
+    const t = { id: Date.now().toString(), title: String(b.title).slice(0, 200), due: b.due || '', priority: b.priority || 'متوسطة', done: false, createdAt: new Date().toISOString() };
+    db.tasks.unshift(t); saveDB(); addLog('success', '➕ مهمة جديدة: ' + t.title); return json(t, 201);
+  }
+  if (req.method === 'POST' && p === '/api/tasks/toggle') {
+    const b = await readBody(req);
+    const t = db.tasks.find(x => x.id === b.id);
+    if (!t) return json({ error: 'غير موجودة' }, 404);
+    t.done = !t.done; saveDB(); addLog('success', (t.done ? '✅ أُنجزت: ' : '↩️ أُعيد فتح: ') + t.title); return json(t);
+  }
+  if (req.method === 'DELETE' && p.startsWith('/api/tasks/')) {
+    const id = p.split('/').pop();
+    const t = db.tasks.find(x => x.id === id);
+    db.tasks = db.tasks.filter(x => x.id !== id); saveDB();
+    if (t) addLog('warning', '🗑️ حُذفت مهمة: ' + t.title);
+    return json({ ok: true });
+  }
+  if (req.method === 'POST' && p === '/api/clients') {
+    const b = await readBody(req);
+    const { client, isNew } = upsertClient(b, 'التطبيق 🖥️');
+    const rem = scheduleReminder(client, null);
+    addLog('success', (isNew ? '🆕 عميل جديد: ' : '🔄 تحديث عميل: ') + (client.fullName || client.nationalId));
+    return json({ ...client, isNew, reminderAt: rem.at }, isNew ? 201 : 200);
+  }
+  if (req.method === 'POST' && p === '/api/ocr') {
+    const b = await readBody(req);
+    if (!b.image) return json({ error: 'الصورة مطلوبة' }, 400);
+    if (!db.settings.kimiApiKey) return json({ error: 'اضبط مفتاح Kimi API من الإعدادات أولاً ⚙️' }, 400);
     try {
-      const r = await kimiChat(key, body.model || db.settings.kimiModel, body.message || 'اختبار الاتصال — رد بجملة واحدة');
-      if (r.choices && r.choices[0]) {
-        const reply = r.choices[0].message.content;
-        addLog('SUCCESS', 'Kimi: تم توليد رد بنجاح');
-        return send({ ok: true, reply });
-      }
-      const errMsg = r.error?.message || JSON.stringify(r);
-      addLog('ERROR', `Kimi: فشل الطلب — ${errMsg}`);
-      return send({ ok: false, error: errMsg }, 401);
-    } catch (e) { addLog('ERROR', `Kimi: خطأ شبكة — ${e.message}`); return send({ ok: false, error: e.message }, 500); }
+      const { client, isNew, reminder } = await processImageToClient(b.image, b.mime || 'image/jpeg', 'التطبيق 🖥️', null);
+      db.settings.lastOcr = { ...client, at: new Date().toISOString() }; saveDB();
+      return json({ client, isNew, reminderAt: reminder.at, reminderHours: reminder.hours });
+    } catch (e) { return json({ error: e.message }, 500); }
   }
-
-  return send({ error: 'المسار غير موجود' }, 404);
+  if (req.method === 'POST' && p === '/api/users/toggle-block') {
+    const b = await readBody(req);
+    const u = db.users.find(x => x.id === b.id);
+    if (!u) return json({ error: 'غير موجود' }, 404);
+    u.blocked = !u.blocked; saveDB(); addLog('warning', (u.blocked ? '🚫 حُظر: ' : '✅ أُلغي حظر: ') + u.username); return json(u);
+  }
+  if (req.method === 'DELETE' && p === '/api/logs') { db.logs = []; saveDB(); return json({ ok: true }); }
+  json({ error: 'Not found' }, 404);
 }
+function readBody(req) { return new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 30e6) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch (e) { r({}); } }); }); }
 
-const server = http.createServer((req, res) => {
-  const t0 = Date.now();
-  const pathname = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname;
-
+// ─── Server ───
+const REQ_LOG_LIMIT = 200;
+const server = http.createServer(async (req, res) => {
+  const t0 = Date.now(); const url = new URL(req.url, 'http://x');
   res.on('finish', () => {
     const ms = Date.now() - t0;
-    const icon = ms > 500 ? '🐢' : '⚡';
-    console.log(`${icon} [${new Date().toLocaleTimeString('ar')}] ${req.method} ${pathname} → ${res.statusCode} (${ms}ms)`);
+    const skip = url.pathname.startsWith('/api/logs');
+    if (!skip || ms > 1000) console.log(`${ms > 1000 ? '🐢' : '⚡'} ${req.method} ${url.pathname} → ${res.statusCode} (${ms}ms)`);
   });
-
-  if (pathname.startsWith('/api/')) {
-    let body = '';
-    req.on('data', c => body += c);
-    req.on('end', () => {
-      let json = {};
-      try { json = body ? JSON.parse(body) : {}; } catch (e) {}
-      handleAPI(req, res, pathname, json);
-    });
-    return;
-  }
-
-  let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
-  if (!filePath.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end('Forbidden'); }
-  fs.readFile(filePath, (err, data) => {
-    if (err) { res.writeHead(404); return res.end('404 - الصفحة غير موجودة'); }
-    const ext = path.extname(filePath);
-    const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
-    if (ext === '.html') {
-      // الصفحة دائماً جديدة حتى تصل التحديثات فوراً
-      headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
-    } else if (ext === '.css' || ext === '.js') {
-      // ملفات CSS/JS مرقّمة بإصدار (?v=) — كاش طويل آمن وسريع جداً
-      headers['Cache-Control'] = 'public, max-age=31536000, immutable';
-    } else {
-      headers['Cache-Control'] = 'public, max-age=86400';
+  try {
+    if (url.pathname.startsWith('/api/')) return await handleAPI(req, res, url);
+    let f = path.normalize(url.pathname === '/' ? '/index.html' : url.pathname);
+    if (f.includes('..')) { res.writeHead(403); return res.end(); }
+    const fp = path.join(PUBLIC_DIR, f);
+    if (!fs.existsSync(fp) || !fs.statSync(fp).isFile()) {
+      const idx = path.join(PUBLIC_DIR, 'index.html');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
+      return res.end(fs.readFileSync(idx));
     }
-    res.writeHead(200, headers);
-    res.end(data);
-  });
+    let cache = 'public, max-age=86400';
+    if (f.endsWith('.html')) cache = 'no-cache, no-store, must-revalidate';
+    else if (url.search.includes('v=')) cache = 'public, max-age=31536000, immutable';
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(fp)] || 'application/octet-stream', 'Cache-Control': cache });
+    fs.createReadStream(fp).pipe(res);
+  } catch (e) { res.writeHead(500); res.end('Server error'); }
 });
 
 server.listen(PORT, () => {
-  const bootMs = Date.now() - BOOT_TIME;
-  const mem = process.memoryUsage();
-  const mb = n => (n / 1024 / 1024).toFixed(1) + ' MB';
-  const dataSize = fs.existsSync(DATA_FILE) ? (fs.statSync(DATA_FILE).size / 1024).toFixed(1) + ' KB' : 'غير موجود';
-
-  console.log('');
-  console.log('╔════════════════════════════════════════════════════╗');
-  console.log(`║   🤖 Claw Office AI v${APP_VERSION} - يعمل الآن           ║`);
-  console.log('╚════════════════════════════════════════════════════╝');
-  console.log('');
-  console.log('📋 معلومات التشغيل:');
-  console.log(`   🌐 الرابط:        http://localhost:${PORT}`);
-  console.log(`   📦 الإصدار:       v${APP_VERSION}`);
-  console.log(`   🟢 Node.js:       ${process.version}`);
-  console.log(`   📱 النظام:        ${os.platform()} / ${os.arch()}`);
-  console.log(`   ⏱ زمن الإقلاع:    ${bootMs}ms`);
-  console.log(`   💾 الذاكرة:       ${mb(mem.rss)} (RSS)`);
-  console.log('');
-  console.log('🗄 قاعدة البيانات:');
-  console.log(`   📄 الملف:         ${DATA_FILE}`);
-  console.log(`   📏 الحجم:         ${dataSize}`);
-  console.log(`   👥 المستخدمون:    ${db.users.length}`);
-  console.log(`   ✅ المهام:        ${db.tasks.length}`);
-  console.log(`   🧾 العملاء:       ${db.clients.length}`);
-  console.log(`   📜 السجلات:       ${db.logs.length}`);
-  console.log('');
-  console.log('⚙️ الإعدادات المحفوظة:');
-  console.log(`   ✈️ بوت تلغرام:    ${db.settings.telegramBotToken ? '✔ رمز محفوظ' : '✖ غير مضبوط'}`);
-  console.log(`   🌙 مفتاح Kimi:    ${db.settings.kimiApiKey ? '✔ محفوظ' : '✖ غير مضبوط'}`);
-  console.log('');
-  console.log('─────────────────────────────────────────────────────');
-  console.log('📡 سجل الطلبات المباشر (⚡ سريع | 🐢 بطيء +500ms):');
-  console.log('─────────────────────────────────────────────────────');
+  const sep = '═'.repeat(40);
+  console.log('\n╔' + sep + '╗');
+  console.log('║   🚀 Claw Office AI v' + APP_VERSION + ' — يعمل الآن      ║');
+  console.log('╚' + sep + '╝');
+  console.log('🌐 الرابط:        http://localhost:' + PORT);
+  console.log('🔑 مفتاح Kimi:    ' + (db.settings.kimiApiKey ? '✅ مضبوط' : '❌ غير مضبوط (الإعدادات)'));
+  console.log('🤖 بوت تلغرام:    ' + (db.settings.telegramBotToken ? '⏳ جارٍ الاتصال...' : '❌ غير مضبوط (الإعدادات)'));
+  console.log('🔐 رمز أمان البوت: ' + db.settings.accessToken);
+  console.log('🔔 مدة التذكير:    ' + db.settings.reminderHours + ' ساعة');
+  console.log('💾 قاعدة البيانات: ' + db.clients.length + ' عميل، ' + db.tasks.length + ' مهمة');
+  console.log(sep);
+  console.log('📡 سجل الطلبات المباشر (آخر ' + REQ_LOG_LIMIT + '):');
+  startBot();
 });
