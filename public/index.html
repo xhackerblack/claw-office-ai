@@ -8,12 +8,12 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=2.1">
 </head>
 <body>
 
 <header class="topbar">
-  <div class="topbar-title">🤖 Claw Office AI</div>
+  <div class="topbar-title">🤖 Claw Office AI <span class="badge cyan" id="app-version">v2.1</span></div>
   <div class="topbar-icons">
     <span class="icon-btn" title="GitHub">⌥</span>
     <span class="icon-btn" title="Cloudflare">☁</span>
@@ -366,6 +366,14 @@
   <button class="nav-btn" data-go="screen-more">⋯<span>المزيد</span></button>
 </nav>
 
-<script src="app.js"></script>
+<script src="app.js?v=2.1"></script>
+<script>
+// عرض الإصدار الحقيقي من الخادم للتأكد من أن التحديث وصل
+fetch('/api/version').then(r => r.json()).then(v => {
+  document.getElementById('app-version').textContent = 'v' + v.version;
+}).catch(() => {
+  document.getElementById('app-version').textContent = 'نسخة قديمة';
+});
+</script>
 </body>
 </html>
