@@ -7,7 +7,8 @@ const PORT = process.env.PORT || 8080;
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DB_FILE = path.join(ROOT, 'data.json');
-const APP_VERSION = '3.2';
+const APP_VERSION = '3.3';
+const DEFAULT_KIMI_MODEL = 'moonshot-v1-8k';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ─── DB ───
@@ -24,6 +25,14 @@ if (!db.settings.accessToken) {
   addLog('system', '🔐 تم توليد رمز أمان جديد للبوت');
 }
 if (!db.settings.reminderHours) db.settings.reminderHours = 5;
+
+// ─── مفتاح Kimi من متغير البيئة (اختياري) ───
+if (!db.settings.kimiApiKey && process.env.KIMI_API_KEY) {
+  db.settings.kimiApiKey = process.env.KIMI_API_KEY.trim();
+  addLog('system', '🌙 تم تحميل مفتاح Kimi من متغير البيئة KIMI_API_KEY');
+}
+// تصحيح نموذج قديم غير موجود
+if (db.settings.kimiModel === 'kimi-k2.5') db.settings.kimiModel = DEFAULT_KIMI_MODEL;
 
 // ─── قاعدة بيانات أولية مدرّبة من مستنداتك ───
 if (!db.settings.seededV3) {
@@ -93,11 +102,36 @@ const MAIN_KB = { keyboard: [
   [{ text: '📊 الإحصائيات' }, { text: '🧾 العملاء' }],
   [{ text: '✅ المهام' }, { text: '⏰ التذكيرات' }],
   [{ text: '🔍 بحث' }, { text: '📜 السجلات' }],
+  [{ text: '🤖 محادثة Kimi' }, { text: '🔚 إنهاء المحادثة' }],
   [{ text: '➕ إضافة عميل' }, { text: '🆔 معرفي' }],
   [{ text: '❓ المساعدة' }]
 ], resize_keyboard: true };
-const BTN = { '📊 الإحصائيات': '/stats', '🧾 العملاء': '/clients', '✅ المهام': '/tasks', '⏰ التذكيرات': '/reminders', '📜 السجلات': '/logs', '🆔 معرفي': '/id', '❓ المساعدة': '/help' };
+const BTN = { '📊 الإحصائيات': '/stats', '🧾 العملاء': '/clients', '✅ المهام': '/tasks', '⏰ التذكيرات': '/reminders', '📜 السجلات': '/logs', '🤖 محادثة Kimi': '/chat', '🔚 إنهاء المحادثة': '/endchat', '🆔 معرفي': '/id', '❓ المساعدة': '/help' };
 const pending = new Map(); // userId -> {action}
+
+// ─── ترجمة أخطاء Kimi إلى العربية ───
+function kimiErrorArabic(msg) {
+  if (/suspended|insufficient balance|exceeded_current_quota|balance|quota/i.test(msg))
+    return '⛔ حساب Kimi موقوف بسبب نفاد الرصيد!\nالحل: افتح platform.moonshot.ai ← Billing/Recharge ← اشحن رصيدك، ثم أعد المحاولة.';
+  if (/auth|401|invalid/i.test(msg))
+    return 'مفتاح Kimi غير صالح أو ملغى (Invalid Authentication).\nالحل: افتح platform.moonshot.ai (وليس .cn إذا كان مفتاحك من المنصة الدولية) ← API Keys ← أنشئ مفتاحاً جديداً ← الصقه في الإعدادات ⚙️ واحفظ.';
+  if (/model|not exist|does not exist|404/i.test(msg))
+    return 'النموذج المختار غير متوفر لمفتاحك.\nالحل: الإعدادات ⚙️ ← نموذج Kimi ← اختر moonshot-v1-8k واحفظ.';
+  if (/fetch|network|ECONN|ETIMEDOUT|timeout/i.test(msg))
+    return 'تعذر الوصول إلى خوادم Kimi — تحقق من اتصال الإنترنت وأعد المحاولة.';
+  return msg;
+}
+
+// ─── إشعار نجاح اتصال Kimi على تلغرام ───
+async function notifyKimiConnected(source) {
+  addLog('success', '🌙 اتصال ناجح مع Kimi API (' + source + ')');
+  const token = db.settings.telegramBotToken;
+  if (!token) return;
+  const text = '🌙✅ تم الاتصال بنجاح مع Kimi API!\n\nيمكنك الآن الدردشة مع الذكاء الاصطناعي مباشرة من هنا:\n• اضغط زر 🤖 محادثة Kimi أو أرسل /chat للبدء\n• اضغط 🔚 إنهاء المحادثة أو أرسل /endchat للإيقاف';
+  for (const u of db.users.filter(x => x.authed && !x.blocked)) {
+    try { await tgCall(token, 'sendMessage', { chat_id: u.id, text }); } catch (e) {}
+  }
+}
 
 // ─── Kimi OCR (تحليل الصور بالذكاء الاصطناعي) ───
 const OCR_PROMPT = 'أنت نظام استخراج بيانات مستندات مغربية. حلل هذه الصورة وأرجع JSON فقط (بدون أي نص آخر) بالمفاتيح: fullName (الاسم الكامل), nationalId (رقم البطاقة مثل CD220673 أو المعرف الرقمي), birthDate, birthPlace, address, father, mother, sex (M/F), phone, email, expiry (تاريخ انتهاء الصلاحية), docType (نوع المستند بالعربية), notes (أي أرقام مهمة أخرى: مبالغ، RIB، أرقام طلبات). إن لم يوجد حقل اتركه فارغاً "". أسماء الأشخاص بالحروف اللاتينية كما في المستند.';
@@ -167,6 +201,10 @@ const HELP_TEXT = `🤖 Claw Office AI — الأوامر:
 🔐 الأمان:
 /auth رمز — تفعيل الوصول (انسخ الرمز من الإعدادات)
 
+🌙 المحادثة مع Kimi:
+/chat — بدء وضع المحادثة مع الذكاء الاصطناعي
+/endchat — إيقاف وضع المحادثة
+
 🧾 العملاء:
 /addclient اسم | معرف | هاتف — إضافة عميل (+ تذكير تلقائي)
 /clients — قائمة العملاء
@@ -203,6 +241,17 @@ async function handleCommand(token, cmd, args, user, chatId) {
       return `🆔 معرفك: ${user.id}\n👤 المستخدم: ${user.username || 'بدون'}\n🔐 الصلاحية: ${requireAdmin(user) ? 'مدير 👑' : 'مستخدم مصرّح ✅'}`;
     case '/ping': return `🏓 بونغ! (${Date.now() - now}ms)`;
     case '/version': return `🤖 Claw Office AI — الإصدار v${APP_VERSION}\n⏱ مدة التشغيل: ${Math.floor((Date.now() - BOT_START) / 60000)} دقيقة`;
+    case '/chat': {
+      if (!db.settings.kimiApiKey) return '⚠️ مفتاح Kimi API غير مضبوط بعد — أضفه من إعدادات التطبيق ⚙️ ثم أعد المحاولة.';
+      user.aiChat = true; saveDB();
+      addLog('system', '🌙 وضع المحادثة مع Kimi مفعّل لـ ' + user.username);
+      return { text: '🌙 وضع المحادثة مع Kimi مفعّل!\n\nأرسل أي رسالة الآن وسيجيبك الذكاء الاصطناعي مباشرة.\nللإيقاف: اضغط 🔚 إنهاء المحادثة أو أرسل /endchat', reply_markup: MAIN_KB };
+    }
+    case '/endchat': {
+      if (!user.aiChat) return 'ℹ️ وضع المحادثة غير مفعّل أصلاً. فعّله بـ /chat';
+      user.aiChat = false; saveDB();
+      return { text: '🔚 تم إيقاف وضع المحادثة مع Kimi.\nعدت إلى وضع الأوامر العادي — اختر من الأزرار:', reply_markup: MAIN_KB };
+    }
     case '/stats': {
       const today = new Date().toDateString();
       return `📊 الإحصائيات:\n🧾 العملاء: ${db.clients.length}\n✅ المهام: ${db.tasks.filter(t => !t.done).length} نشطة / ${db.tasks.length} إجمالي\n👥 المستخدمون: ${db.users.length}\n⏰ تذكيرات قادمة: ${db.reminders.filter(r => !r.sent).length}\n📜 سجلات اليوم: ${db.logs.filter(l => new Date(l.at).toDateString() === today).length}\n🔔 مدة التذكير: ${db.settings.reminderHours} ساعة`;
@@ -384,7 +433,7 @@ async function processUpdate(token, u) {
       await botReply(token, chatId, { text: clientCardText(client, isNew, reminder), reply_markup: { inline_keyboard: [[{ text: '👤 عرض الملف', callback_data: 'client:' + client.id }], [{ text: '❌ إلغاء التذكير', callback_data: 'cancelrem:' + reminder.id }]] } });
     } catch (e) {
       addLog('error', '📷 فشل تحليل صورة: ' + e.message);
-      await botReply(token, chatId, '❌ ' + e.message);
+      await botReply(token, chatId, '❌ ' + kimiErrorArabic(e.message));
     }
     return;
   }
@@ -399,6 +448,20 @@ async function processUpdate(token, u) {
   if (text === '🔍 بحث') { pending.set(user.id, { action: 'search' }); await botReply(token, chatId, '🔎 أرسل كلمة البحث:'); return; }
   if (text === '➕ إضافة عميل') { pending.set(user.id, { action: 'addclient' }); await botReply(token, chatId, '📝 أرسل بالصيغة:\nالاسم | المعرف | الهاتف'); return; }
   const mapped = BTN[text];
+
+  // 🌙 وضع المحادثة مع Kimi — أي نص حر يُرسل إلى الذكاء الاصطناعي
+  if (!mapped && user.aiChat && !text.startsWith('/')) {
+    if (!db.settings.kimiApiKey) { user.aiChat = false; saveDB(); await botReply(token, chatId, '⚠️ مفتاح Kimi غير مضبوط — تم إيقاف وضع المحادثة.'); return; }
+    await tgCall(token, 'sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
+    try {
+      const r = await kimiChat(db.settings.kimiApiKey, db.settings.kimiModel || DEFAULT_KIMI_MODEL, text);
+      await botReply(token, chatId, { text: '🌙 ' + r.reply, reply_markup: MAIN_KB });
+    } catch (e) {
+      addLog('error', '🌙 خطأ محادثة Kimi: ' + e.message);
+      await botReply(token, chatId, '❌ ' + kimiErrorArabic(e.message) + '\n\n(لإيقاف وضع المحادثة: /endchat)');
+    }
+    return;
+  }
 
   // تنفيذ الأمر
   const parts = text.split(' ');
@@ -496,6 +559,20 @@ async function kimiChat(apiKey, model, message) {
   throw new Error(lastErr);
 }
 
+// فحص اتصال Kimi — يُستعمل من التطبيق وعند الإقلاع
+async function checkKimiConnection(source) {
+  if (!db.settings.kimiApiKey) return { ok: false, error: 'لم يتم ضبط مفتاح Kimi API' };
+  try {
+    const r = await kimiChat(db.settings.kimiApiKey, db.settings.kimiModel || DEFAULT_KIMI_MODEL, 'اختبار اتصال — رد بكلمة واحدة: تم');
+    await notifyKimiConnected(source);
+    return { ok: true, reply: r.reply };
+  } catch (e) {
+    const msg = kimiErrorArabic(e.message);
+    addLog('error', '🌙 فشل اتصال Kimi (' + source + '): ' + e.message);
+    return { ok: false, error: msg, raw: e.message };
+  }
+}
+
 // ─── API ───
 async function handleAPI(req, res, url) {
   const p = url.pathname;
@@ -525,7 +602,7 @@ async function handleAPI(req, res, url) {
   if (req.method === 'POST' && p === '/api/settings') {
     const b = await readBody(req);
     if (b.telegramBotToken) { const changed = b.telegramBotToken !== db.settings.telegramBotToken; db.settings.telegramBotToken = b.telegramBotToken; if (changed) { stopBot(); setTimeout(startBot, 500); } }
-    if (b.kimiApiKey) db.settings.kimiApiKey = b.kimiApiKey;
+    if (b.kimiApiKey) db.settings.kimiApiKey = b.kimiApiKey.trim();
     if (b.kimiModel) db.settings.kimiModel = b.kimiModel;
     if (b.reminderHours !== undefined && !isNaN(parseFloat(b.reminderHours))) db.settings.reminderHours = Math.min(168, Math.max(0.25, parseFloat(b.reminderHours)));
     saveDB(); addLog('system', '⚙️ تم تحديث الإعدادات'); return json({ ok: true });
@@ -537,6 +614,11 @@ async function handleAPI(req, res, url) {
     return json({ ok: true, token: db.settings.accessToken });
   }
   if (req.method === 'POST' && p === '/api/bot/restart') { stopBot(); setTimeout(startBot, 1000); return json({ ok: true, message: 'جارٍ إعادة تشغيل البوت...' }); }
+  if (req.method === 'POST' && p === '/api/kimi/test') {
+    if (!db.settings.kimiApiKey) return json({ ok: false, error: 'لم يتم ضبط مفتاح Kimi API — احفظ المفتاح أولاً' }, 400);
+    const r = await checkKimiConnection('اختبار من التطبيق');
+    return json(r, r.ok ? 200 : 500);
+  }
   if (req.method === 'POST' && p === '/api/telegram/test') {
     const token = db.settings.telegramBotToken;
     if (!token) return json({ ok: false, error: 'أدخل رمز البوت أولاً' }, 400);
@@ -577,11 +659,10 @@ async function handleAPI(req, res, url) {
   if (req.method === 'POST' && p === '/api/chat') {
     const b = await readBody(req);
     if (!db.settings.kimiApiKey) return json({ error: 'لم يتم ضبط مفتاح Kimi API. أضفه من الإعدادات ⚙️' }, 400);
-    try { const r = await kimiChat(db.settings.kimiApiKey, db.settings.kimiModel || 'kimi-k2.5', b.message); return json(r); }
+    try { const r = await kimiChat(db.settings.kimiApiKey, db.settings.kimiModel || DEFAULT_KIMI_MODEL, b.message); return json(r); }
     catch (e) {
-      let msg = e.message;
-      if (/auth|401|invalid/i.test(msg)) msg = 'مفتاح Kimi غير صالح أو ملغى (Invalid Authentication).\nالحل: افتح platform.moonshot.cn (أو platform.moonshot.ai) ← API Keys ← أنشئ مفتاحاً جديداً ← الصقه في الإعدادات ⚙️ واحفظ.';
-      addLog('error', 'Kimi: فشل الطلب — ' + msg.split('\n')[0]);
+      const msg = kimiErrorArabic(e.message);
+      addLog('error', 'Kimi: فشل الطلب — ' + e.message.split('\n')[0]);
       return json({ error: 'خطأ Kimi: ' + msg }, 500);
     }
   }
@@ -639,7 +720,7 @@ async function handleAPI(req, res, url) {
       const { client, isNew, reminder } = await processImageToClient(b.image, b.mime || 'image/jpeg', 'التطبيق 🖥️', null);
       db.settings.lastOcr = { ...client, at: new Date().toISOString() }; saveDB();
       return json({ client, isNew, reminderAt: reminder.at, reminderHours: reminder.hours });
-    } catch (e) { return json({ error: e.message }, 500); }
+    } catch (e) { return json({ error: kimiErrorArabic(e.message) }, 500); }
   }
   if (req.method === 'POST' && p === '/api/users/toggle-block') {
     const b = await readBody(req);
@@ -701,7 +782,16 @@ server.listen(PORT, () => {
   console.log('  1) Open Telegram and send this to your bot:');
   console.log('       /auth ' + db.settings.accessToken);
   console.log('  2) Then send any document photo -> auto client file');
+  console.log('  3) AI chat in bot -> send /chat (stop: /endchat)');
   console.log(L);
   console.log('  LIVE REQUEST LOG (ok = fast, SLOW > 1000ms):');
   startBot();
+  // فحص Kimi عند الإقلاع — عند النجاح يُرسل تأكيد إلى بوت تلغرام
+  if (db.settings.kimiApiKey) {
+    setTimeout(async () => {
+      const r = await checkKimiConnection('فحص تلقائي عند الإقلاع');
+      if (!r.ok) console.log('  KIMI CHECK ....... [ !! ] FAILED -> ' + (r.raw || r.error).slice(0, 120));
+      else console.log('  KIMI CHECK ....... [ OK ] connected, Telegram notified');
+    }, 4000);
+  }
 });
