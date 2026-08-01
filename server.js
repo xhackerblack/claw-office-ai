@@ -66,19 +66,98 @@ async function tgCall(token, method, payload = {}) {
 }
 
 async function kimiChat(apiKey, model, message) {
-  const r = await fetch('https://api.moonshot.ai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: model || 'kimi-k2-0711-preview',
-      messages: [
-        { role: 'system', content: 'أنت مدير الذكاء الاصطناعي في تطبيق Claw Office AI لإدارة المكاتب. أجب بالعربية باختصار واحترافية.' },
-        { role: 'user', content: message },
-      ],
-      temperature: 0.6,
-    }),
+  const payload = JSON.stringify({
+    model: model || 'kimi-k2-0711-preview',
+    messages: [
+      { role: 'system', content: 'أنت مدير الذكاء الاصطناعي في تطبيق Claw Office AI لإدارة المكاتب. أجب بالعربية باختصار واحترافية.' },
+      { role: 'user', content: message },
+    ],
+    temperature: 0.6,
   });
-  return r.json();
+  // تجربة النطاق الدولي ثم الصيني كاحتياط
+  const hosts = ['https://api.moonshot.ai/v1/chat/completions', 'https://api.moonshot.cn/v1/chat/completions'];
+  let lastErr = null;
+  for (const url of hosts) {
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: payload,
+      });
+      const j = await r.json();
+      // إن كان الخطأ مصادقة، لا فائدة من تجربة نطاق آخر
+      if (r.status === 401 || r.status === 403) return j;
+      if (j.choices) return j;
+      lastErr = j;
+    } catch (e) { lastErr = { error: { message: e.message } }; }
+  }
+  return lastErr;
+}
+
+// ─── محرك البوت (ردود تلقائية على تلغرام) ───
+let botTimer = null;
+let lastUpdateId = 0;
+
+async function botTick() {
+  const token = db.settings.telegramBotToken;
+  if (!token) return;
+  try {
+    const r = await tgCall(token, 'getUpdates', { offset: lastUpdateId + 1, limit: 20, timeout: 0 });
+    if (!r.ok) { addLog('ERROR', `البوت: فشل الجلب — ${r.description}`); stopBot(); return; }
+    for (const u of r.result) {
+      lastUpdateId = Math.max(lastUpdateId, u.update_id);
+      const msg = u.message;
+      if (!msg || !msg.text) continue;
+      const chatId = msg.chat.id;
+      const username = msg.from.username || msg.from.first_name || 'مجهول';
+      const text = msg.text.trim();
+
+      // تسجيل المستخدم
+      let user = db.users.find(x => x.id === msg.from.id);
+      if (!user) {
+        user = { id: msg.from.id, username, handle: '@' + username, status: 'ACTIVE', blocked: false, last: 'الآن' };
+        db.users.unshift(user);
+        addLog('SUCCESS', `مستخدم جديد انضم للبوت: @${username} (${chatId})`);
+      }
+      user.last = 'الآن';
+
+      // الحظر التلقائي للمجهولين
+      if (user.blocked) { addLog('ERROR', `تم تجاهل رسالة من محظور: @${username}`); continue; }
+      addLog('INFO', `رسالة من @${username}: ${text.slice(0, 60)}`);
+
+      // الردود
+      if (text === '/start') {
+        await tgCall(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `🤖 أهلاً بك في Claw Office AI!\n\n✅ تم تسجيلك بنجاح.\n🆔 معرف الدردشة الخاص بك: ${chatId}\n\nالأوامر المتاحة:\n/id — عرض معرفك\n/help — المساعدة`,
+        });
+        addLog('SUCCESS', `تم الرد على /start من @${username}`);
+      } else if (text === '/id') {
+        await tgCall(token, 'sendMessage', { chat_id: chatId, text: `🆔 معرف الدردشة: ${chatId}` });
+      } else if (text === '/help') {
+        await tgCall(token, 'sendMessage', { chat_id: chatId, text: '📋 أوامر البوت:\n/start — التسجيل\n/id — معرف الدردشة\n/help — هذه القائمة' });
+      } else if (db.settings.kimiApiKey) {
+        // رد ذكي عبر Kimi
+        const ai = await kimiChat(db.settings.kimiApiKey, db.settings.kimiModel, text);
+        const reply = ai.choices?.[0]?.message?.content || 'عذراً، لم أستطع الرد الآن.';
+        await tgCall(token, 'sendMessage', { chat_id: chatId, text: reply });
+        addLog('SUCCESS', `رد ذكي (Kimi) على @${username}`);
+      } else {
+        await tgCall(token, 'sendMessage', { chat_id: chatId, text: '🤖 استلمت رسالتك. (فعّل مفتاح Kimi API من الإعدادات للردود الذكية)' });
+      }
+    }
+    saveDB();
+  } catch (e) { addLog('ERROR', `البوت: خطأ شبكة — ${e.message}`); }
+}
+
+function startBot() {
+  if (botTimer) return;
+  botTimer = setInterval(botTick, 3000);
+  addLog('SUCCESS', 'تم تشغيل محرك البوت — يرد تلقائياً على الرسائل');
+}
+function stopBot() {
+  if (botTimer) { clearInterval(botTimer); botTimer = null; }
+  addLog('WARN', 'تم إيقاف محرك البوت');
 }
 
 // ─── واجهات API ───
@@ -169,6 +248,20 @@ async function handleAPI(req, res, pathname, body) {
       addLog('ERROR', `تلغرام: فشل جلب الرسائل — ${r.description}`);
       return send({ ok: false, error: r.description }, 400);
     } catch (e) { addLog('ERROR', `تلغرام: خطأ شبكة — ${e.message}`); return send({ ok: false, error: e.message }, 500); }
+  }
+  if (req.method === 'POST' && pathname === '/api/telegram/bot') {
+    const token = body.token || db.settings.telegramBotToken;
+    if (!token) return send({ ok: false, error: 'أدخل رمز البوت أولاً' }, 400);
+    if (body.action === 'start') {
+      db.settings.telegramBotToken = token; saveDB();
+      startBot();
+      return send({ ok: true, running: true });
+    }
+    stopBot();
+    return send({ ok: true, running: false });
+  }
+  if (req.method === 'GET' && pathname === '/api/telegram/bot-status') {
+    return send({ running: !!botTimer });
   }
 
   // ─── Kimi AI ───
