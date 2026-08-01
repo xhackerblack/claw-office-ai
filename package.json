@@ -1,0 +1,14 @@
+{
+  "name": "claw-office-ai",
+  "version": "1.0.0",
+  "description": "وكيل ذكاء اصطناعي لإدارة المكاتب - يعمل على Termux بدون تبعيات",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["ai", "office", "arabic", "termux", "ocr"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=16"
+  }
+}
