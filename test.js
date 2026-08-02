@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ═══ Claw Office AI v3.3 — نظام الاختبار الشامل ═══
+ * ═══ Claw Office AI v4.0 — نظام الاختبار الشامل ═══
  * يفحص: API + الواجهة + أوامر البوت + الأمان + التذكيرات + صفحة العملاء
  * التشغيل: node test.js
  */
@@ -55,7 +55,7 @@ function testUI() {
   const badGo = [...gos].filter(g => !screens.has(g));
   ok('ui', 'كل أزرار data-go تشير إلى شاشات موجودة', badGo.length === 0, 'خاطئ: ' + badGo.join(', '));
 
-  ok('ui', 'الشريط السفلي يحتوي 5 أزرار', (html.match(/class="nav-btn/g) || []).length === 5);
+  ok('ui', 'التنقل السفلي: 4 أزرار + زر مركزي FAB', (html.match(/class="nav-btn/g) || []).length === 4 && html.includes('nav-fab'));
 
   const idArr = [...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]);
   const dupes = idArr.filter((v, i) => idArr.indexOf(v) !== i);
@@ -63,6 +63,7 @@ function testUI() {
 
   ok('ui', 'RTL والعربية', html.includes('dir="rtl"') && html.includes('lang="ar"'));
   ok('ui', 'خط Cairo غير حاجب', html.includes('media="print"') && html.includes('Cairo'));
+  ok('ui', '📱 بلا تمرير للصفحة (overflow:hidden)', /html,body\{height:100%;overflow:hidden\}/.test(css));
 
   for (const s of screens) {
     const re = new RegExp(`<section id="${s}"[^>]*>([\\s\\S]*?)</section>`);
@@ -79,22 +80,33 @@ function testUI() {
 
   // لا بيانات تجريبية
   ok('ui', '⚠ لا بيانات تجريبية (سارة العلوي/أحمد العلوي)', !html.includes('سارة العلوي') && !html.includes('أحمد العلوي') && !html.includes('AB123456'));
-  // بطاقات جديدة
   ok('ui', 'بطاقة رمز الأمان موجودة', html.includes('access-token') && html.includes('token-regen'));
   ok('ui', 'بطاقة مدة التذكير موجودة', html.includes('rem-range') && html.includes('rem-save'));
-  ok('ui', 'زر مسح المستند OCR موجود', html.includes('doc-file') && html.includes('upload-doc'));
-  // صفحة العملاء v3.3
+  ok('ui', '📷 منطقة إدراج الصور موجودة', html.includes('doc-file') && html.includes('doc-drop') && appjs.includes("$('#doc-drop')"));
+  // صفحة العملاء v4.0
   ok('ui', '🧾 صفحة العملاء موجودة في التنقل', html.includes('screen-clients') && html.includes('clients-grid'));
   ok('ui', '🧾 زر العملاء في الشريط السفلي', /<button class="nav-btn" data-go="screen-clients">/.test(html));
   ok('ui', '🧾 بطاقة التعديل موجودة (ce-save/ce-cancel)', html.includes('client-edit-card') && html.includes('ce-save') && html.includes('ce-cancel'));
   ok('ui', '🧾 بحث العملاء موجود', html.includes('client-search'));
   ok('ui', '🧾 منطق التعديل والحذف في app.js', appjs.includes('editClient') && appjs.includes('deleteClient') && appjs.includes('/api/clients/update'));
+  ok('ui', '🧾 حماية تجاوز الأسماء (ellipsis)', css.includes('text-overflow:ellipsis') && appjs.includes('ellip'));
 
-  // Kimi v3.3
+  // المواعيد v4.0
+  ok('ui', '⏰ شاشة المواعيد موجودة بتبويبين', html.includes('screen-agenda') && html.includes('agenda-tabs') && html.includes('agenda-list'));
+  ok('ui', '⏰ منطق المواعيد يجلب التذكيرات والمهام', appjs.includes('loadAgenda') && appjs.includes("/api/reminders") && appjs.includes("/api/tasks"));
+
+  // القوالب v4.0
+  ok('ui', '🧠 شاشة التدريب موجودة', html.includes('screen-training') && html.includes('tpl-file') && html.includes('tpl-text'));
+  ok('ui', '🧠 رفع القوالب ولصقها في app.js', appjs.includes("'/api/templates/upload'"));
+  ok('ui', '🖨 نافذة توليد الوثيقة موجودة', html.includes('gen-overlay') && html.includes('gen-run') && appjs.includes("'/api/templates/generate'"));
+  ok('ui', '🖨 فتح الوثيقة للطباعة PDF', appjs.includes('Blob') && appjs.includes('window.open'));
+
+  // Kimi v4.0
   const srvSrc = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   ok('ui', '🌙 الخادم يدعم /chat و /endchat ووضع aiChat', srvSrc.includes("case '/chat'") && srvSrc.includes("case '/endchat'") && srvSrc.includes('aiChat'));
   ok('ui', '🌙 زر اختبار Kimi يستعمل /api/kimi/test', appjs.includes("'/api/kimi/test'"));
   ok('ui', '🌙 نموذج moonshot-v1-8k هو الافتراضي', html.includes('value="moonshot-v1-8k" selected') && srvSrc.includes("DEFAULT_KIMI_MODEL = 'moonshot-v1-8k'"));
+  ok('ui', '🤖 حالة الوكيل الحقيقية في الواجهة', appjs.includes("'/api/agent-status'") && html.includes('agent-ring'));
 
   // XSS
   ok('ui', '⚠ أمان: esc() مستعملة في الحقن', appjs.includes('function esc(') && !/insertAdjacentHTML\('beforeend', `<div class="msg me">\$\{inp\.value\}/.test(appjs));
@@ -106,14 +118,14 @@ async function testAPI() {
   console.log('\n━━━ 🌐 فحص واجهات API ━━━');
 
   let r = await req('/api/version');
-  ok('api', '/api/version', r.status === 200 && r.json?.version === '3.3', JSON.stringify(r.json));
+  ok('api', '/api/version', r.status === 200 && r.json?.version === '4.0', JSON.stringify(r.json));
 
   r = await req('/');
   ok('api', 'الصفحة الرئيسية (200)', r.status === 200);
 
-  r = await req('/styles.css?v=3.3');
+  r = await req('/styles.css?v=4.0');
   ok('api', 'الأصول المُرقّمة بكاش immutable', r.status === 200 && /immutable/.test(r.headers.get('cache-control') || ''));
-  r = await req('/app.js?v=3.3');
+  r = await req('/app.js?v=4.0');
   ok('api', 'app.js يُقدَّم (200)', r.status === 200);
 
   r = await req('/api/stats');
@@ -145,7 +157,7 @@ async function testAPI() {
   ok('api', 'upsert: لا تكرار للعميل', r.json.filter(c => c.nationalId === 'TEST123').length === 1);
   ok('api', 'upsert: البيانات حُدّثت', r.json.find(c => c.nationalId === 'TEST123').email === 't@t.com');
 
-  // ─── تعديل عميل (v3.3) ───
+  // ─── تعديل عميل (v4.0) ───
   r = await req('/api/clients/update', 'POST', { id: testClientId, fullName: 'عميل معدّل', phone: '0699999999' });
   ok('api', '✏️ POST /api/clients/update يعدّل الحقول', r.status === 200 && r.json?.fullName === 'عميل معدّل' && r.json?.phone === '0699999999');
   ok('api', '✏️ التعديل يحافظ على باقي الحقول', r.json?.nationalId === 'TEST123' && r.json?.email === 't@t.com');
@@ -161,7 +173,7 @@ async function testAPI() {
   ok('api', '⏰ التذكير الجديد يحترم مدة الساعتين', r.json.find(x => x.clientName === 'عميل ساعتين')?.hours === 2);
   await req('/api/settings', 'POST', { reminderHours: 5 });
 
-  // ─── حذف عميل (v3.3) ───
+  // ─── حذف عميل (v4.0) ───
   const delClient = (await req('/api/clients', 'POST', { fullName: 'عميل للحذف', nationalId: 'DEL999' })).json;
   ok('api', '🗑 تذكير عميل الحذف أُنشئ', !!delClient?.reminderAt);
   r = await req('/api/clients/' + delClient.id, 'DELETE');
@@ -186,6 +198,33 @@ async function testAPI() {
   ok('api', '🔐 رمز الأمان مولّد تلقائياً (COA-)', /^COA-[0-9A-F]{8}$/.test(tok1 || ''), tok1);
   r = await req('/api/token/regen', 'POST', {});
   ok('api', '🔐 توليد رمز جديد', r.status === 200 && r.json?.token && r.json.token !== tok1);
+
+  // ─── حالة الوكيل (v4.0) ───
+  r = await req('/api/agent-status');
+  ok('api', '🤖 /api/agent-status يرجع بيانات حقيقية', r.status === 200 && typeof r.json.clients === 'number' && typeof r.json.uptimeSec === 'number' && typeof r.json.botRunning === 'boolean' && typeof r.json.docsProcessed === 'number');
+  ok('api', '🤖 الحالة تشمل تفاصيل Kimi والتذكيرات', r.json.kimiConfigured === false && typeof r.json.remindersPending === 'number' && r.json.kimiModel === 'moonshot-v1-8k');
+
+  // ─── القوالب (v4.0) ───
+  r = await req('/api/templates/upload', 'POST', { name: 'طلب اختبار', text: 'أنا الموقع أسفله {{fullName}}، الحامل للبطاقة الوطنية رقم {{nationalId}}، المولود بتاريخ {{birthDate}}، أطلب الاستفادة من الخدمة. حرر بتاريخ {{date}}.' });
+  ok('api', '📄 POST /api/templates/upload (نص) → 201', r.status === 201 && r.json?.ok === true);
+  const tplId = r.json?.template?.id;
+  ok('api', '📄 اكتشاف الحقول تلقائياً (4 حقول)', r.json?.template?.fields?.length === 4, JSON.stringify(r.json?.template?.fields));
+  r = await req('/api/templates/upload', 'POST', { name: 'قصير', text: 'قصير' });
+  ok('api', '📄 رفض محتوى قصير جداً → 400', r.status === 400);
+  r = await req('/api/templates');
+  ok('api', '📄 GET /api/templates يسرد القالب بدون محتواه', r.json.some(t => t.id === tplId) && r.json.every(t => t.content === undefined));
+  r = await req('/api/templates/' + tplId + '/content');
+  ok('api', '📄 جلب محتوى القالب', r.status === 200 && r.json.content.includes('{{fullName}}'));
+  r = await req('/api/templates/generate', 'POST', { templateId: tplId, values: { fullName: 'TEST FULLNAME', nationalId: 'TST123' } });
+  ok('api', '🖨 توليد وثيقة HTML عربية RTL', r.status === 200 && r.json?.ok && r.json.html.includes('dir="rtl"') && r.json.html.includes('TEST FULLNAME') && r.json.html.includes('TST123'));
+  ok('api', '🖨 الوثيقة تتضمن زر طباعة PDF وخط Cairo', r.json.html.includes('window.print') && r.json.html.includes('Cairo'));
+  ok('api', '🖨 الحقول الفارغة تصبح نقاط تعبئة', r.json.html.includes('………………'));
+  r = await req('/api/templates/generate', 'POST', { templateId: 'no-such', values: {} });
+  ok('api', '🖨 توليد من قالب غير موجود → 404', r.status === 404);
+  r = await req('/api/templates/' + tplId, 'DELETE');
+  ok('api', '🗑 حذف القالب', r.status === 200 && r.json?.ok === true);
+  r = await req('/api/templates');
+  ok('api', '🗑 القالب اختفى من القائمة', !r.json.some(t => t.id === tplId));
 
   // ─── OCR بدون مفتاح ───
   r = await req('/api/ocr', 'POST', { image: 'aGVsbG8=' });
@@ -251,8 +290,8 @@ new Function('module', 'exports', 'require', '__dirname', src)(m, m.exports, req
   await t('/help', '', r => txt(r).includes('/auth') && txt(r).includes('/reminders'));
   await t('/id', '', r => txt(r).includes('777'));
   await t('/ping', '', r => txt(r).includes('بونغ'));
-  await t('/version', '', r => txt(r).includes('3.3'));
-  // محادثة Kimi v3.3
+  await t('/version', '', r => txt(r).includes('4.0'));
+  // محادثة Kimi v4.0
   await t('/chat', '', r => txt(r).includes('⚠️') && !user.aiChat);
   db.settings.kimiApiKey = 'test-key';
   await t('/chat', '', r => txt(r).includes('مفعّل') && user.aiChat === true && r.reply_markup === MAIN_KB);
@@ -338,7 +377,7 @@ async function testSync() {
 // ═══ التشغيل ═══
 (async () => {
   console.log('╔══════════════════════════════════════════════╗');
-  console.log('║  🧪 Claw Office AI v3.3 — الاختبار الشامل    ║');
+  console.log('║  🧪 Claw Office AI v4.0 — الاختبار الشامل    ║');
   console.log('╚══════════════════════════════════════════════╝');
 
   const df = path.join(ROOT, 'data.json');
