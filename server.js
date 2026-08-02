@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 8080;
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DB_FILE = path.join(ROOT, 'data.json');
-const APP_VERSION = '3.3';
+const APP_VERSION = '4.0';
 const DEFAULT_KIMI_MODEL = 'moonshot-v1-8k';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -16,6 +16,7 @@ let db = { clients: [], tasks: [], users: [], logs: [], reminders: [], settings:
 if (fs.existsSync(DB_FILE)) { try { db = JSON.parse(fs.readFileSync(DB_FILE)); } catch (e) {} }
 db.clients = db.clients || []; db.tasks = db.tasks || []; db.users = db.users || [];
 db.logs = db.logs || []; db.reminders = db.reminders || []; db.settings = db.settings || {};
+db.templates = db.templates || [];
 function saveDB() { try { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); } catch (e) {} }
 function addLog(level, text) { db.logs.unshift({ level, text, at: new Date().toISOString() }); if (db.logs.length > 500) db.logs = db.logs.slice(0, 500); }
 
@@ -573,6 +574,114 @@ async function checkKimiConnection(source) {
   }
 }
 
+// ═══ v4.0 — القوالب والتعلم من الملفات + توليد الوثائق ═══
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// استخراج نص DOCX (أرشيف zip بداخله word/document.xml) — بدون أي مكتبات
+function extractDocxText(buf) {
+  const zlib = require('zlib');
+  const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (eocd < 0) throw new Error('ملف DOCX غير صالح');
+  const count = buf.readUInt16LE(eocd + 10);
+  let off = buf.readUInt32LE(eocd + 16);
+  for (let i = 0; i < count; i++) {
+    if (buf.readUInt32LE(off) !== 0x02014b50) break;
+    const method = buf.readUInt16LE(off + 10);
+    const compSize = buf.readUInt32LE(off + 20);
+    const nameLen = buf.readUInt16LE(off + 28);
+    const extraLen = buf.readUInt16LE(off + 30);
+    const commentLen = buf.readUInt16LE(off + 32);
+    const localOff = buf.readUInt32LE(off + 42);
+    const name = buf.slice(off + 46, off + 46 + nameLen).toString();
+    if (name === 'word/document.xml') {
+      const lhNameLen = buf.readUInt16LE(localOff + 26);
+      const lhExtraLen = buf.readUInt16LE(localOff + 28);
+      const dataStart = localOff + 30 + lhNameLen + lhExtraLen;
+      const comp = buf.slice(dataStart, dataStart + compSize);
+      const xml = method === 8 ? zlib.inflateRawSync(comp).toString('utf8') : comp.toString('utf8');
+      return xml
+        .replace(/<w:tab[^>]*\/?>/g, '\t')
+        .replace(/<\/w:p>/g, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+        .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  throw new Error('لم يُعثر على محتوى داخل DOCX');
+}
+
+// نسخ نص صورة عبر Kimi Vision (لتعلم القوالب من الصور)
+async function kimiTranscribe(apiKey, base64, mime) {
+  const payload = {
+    model: db.settings.kimiVisionModel || 'moonshot-v1-8k-vision-preview',
+    temperature: 0.1,
+    messages: [{ role: 'user', content: [
+      { type: 'image_url', image_url: { url: 'data:' + (mime || 'image/jpeg') + ';base64,' + base64 } },
+      { type: 'text', text: 'انسخ كل النص الظاهر في هذه الصورة حرفياً كما هو وبنفس الترتيب، بدون أي تعليق أو شرح إضافي.' }
+    ] }]
+  };
+  const hosts = ['https://api.moonshot.ai/v1/chat/completions', 'https://api.moonshot.cn/v1/chat/completions'];
+  let lastErr = '';
+  for (const url of hosts) {
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey }, body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || ('HTTP ' + res.status));
+      return data.choices?.[0]?.message?.content || '';
+    } catch (e) { lastErr = e.message; }
+  }
+  throw new Error(lastErr || 'فشل نسخ النص');
+}
+
+function detectFields(text) {
+  return [...new Set([...text.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)].map(m => m[1].trim()))];
+}
+
+// بناء صفحة وثيقة عربية RTL جاهزة للطباعة/الحفظ PDF
+function buildDocumentHTML(title, bodyHtml) {
+  const today = new Date().toLocaleDateString('ar-MA', { timeZone: 'Africa/Casablanca', year: 'numeric', month: 'long', day: 'numeric' });
+  return `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escapeHtml(title)}</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Cairo',Tahoma,sans-serif;background:#EEF0F8;color:#1E2247;direction:rtl;padding:24px;line-height:2.1}
+  .sheet{max-width:820px;margin:0 auto;background:#fff;border-radius:18px;box-shadow:0 12px 40px rgba(30,34,71,.14);overflow:hidden}
+  .doc-head{background:linear-gradient(135deg,#1E2247,#2C3160);color:#fff;padding:30px 36px}
+  .doc-head h1{font-size:22px;font-weight:900}
+  .doc-head small{opacity:.75;font-size:12px;font-weight:600}
+  .doc-body{padding:36px;font-size:15.5px;white-space:pre-wrap;font-weight:600}
+  .doc-foot{border-top:2px dashed #E3E6F2;padding:16px 36px;color:#8A8FB5;font-size:12px;display:flex;justify-content:space-between;font-weight:700}
+  .brand{color:#FF4D6D;font-weight:900}
+  .actions{max-width:820px;margin:16px auto 0;display:flex;gap:10px}
+  .actions button{flex:1;border:none;border-radius:14px;padding:14px;font-family:inherit;font-size:15px;font-weight:800;cursor:pointer}
+  .print{background:#FF4D6D;color:#fff}
+  .back{background:#1E2247;color:#fff}
+  @media print{body{background:#fff;padding:0}.actions{display:none}.sheet{box-shadow:none;border-radius:0;max-width:100%}}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="doc-head"><h1>${escapeHtml(title)}</h1><small>وثيقة مولّدة آلياً — ${today}</small></div>
+  <div class="doc-body">${bodyHtml}</div>
+  <div class="doc-foot"><span>أُنشئت بواسطة <span class="brand">Claw Office AI</span></span><span>${today}</span></div>
+</div>
+<div class="actions">
+  <button class="print" onclick="window.print()">🖨 طباعة / حفظ كـ PDF</button>
+  <button class="back" onclick="window.close()">إغلاق</button>
+</div>
+</body>
+</html>`;
+}
+
 // ─── API ───
 async function handleAPI(req, res, url) {
   const p = url.pathname;
@@ -729,6 +838,112 @@ async function handleAPI(req, res, url) {
     u.blocked = !u.blocked; saveDB(); addLog('warning', (u.blocked ? '🚫 حُظر: ' : '✅ أُلغي حظر: ') + u.username); return json(u);
   }
   if (req.method === 'DELETE' && p === '/api/logs') { db.logs = []; saveDB(); return json({ ok: true }); }
+
+  // ─── v4.0: حالة الوكيل الحقيقية (دقيقة — من السجلات والبيانات الفعلية) ───
+  if (req.method === 'GET' && p === '/api/agent-status') {
+    const today = new Date().toDateString();
+    const ocrOk = db.logs.filter(l => l.level === 'success' && /من صورة/.test(l.text)).length;
+    const ocrFail = db.logs.filter(l => l.level === 'error' && /فشل تحليل صورة/.test(l.text)).length;
+    const kimiOkLog = db.logs.find(l => /اتصال ناجح مع Kimi/.test(l.text));
+    const kimiErrLog = db.logs.find(l => l.level === 'error' && /Kimi/.test(l.text));
+    const done = db.tasks.filter(t => t.done).length;
+    return json({
+      version: APP_VERSION,
+      uptimeSec: Math.floor((Date.now() - BOT_START) / 1000),
+      botRunning,
+      kimiConfigured: !!db.settings.kimiApiKey,
+      kimiModel: db.settings.kimiModel || DEFAULT_KIMI_MODEL,
+      kimiLastOk: kimiOkLog ? kimiOkLog.at : null,
+      kimiLastError: kimiErrLog && (!kimiOkLog || kimiErrLog.at > kimiOkLog.at) ? kimiErrLog.text : '',
+      clients: db.clients.length,
+      docsProcessed: ocrOk,
+      ocrFailed: ocrFail,
+      ocrRate: (ocrOk + ocrFail) ? Math.round(ocrOk / (ocrOk + ocrFail) * 100) : null,
+      tasksActive: db.tasks.length - done,
+      tasksDone: done,
+      taskRate: db.tasks.length ? Math.round(done / db.tasks.length * 100) : null,
+      remindersPending: db.reminders.filter(r => !r.sent).length,
+      remindersSent: db.reminders.filter(r => r.sent).length,
+      messagesToday: db.logs.filter(l => new Date(l.at).toDateString() === today).length,
+      users: db.users.length,
+      templates: db.templates.length,
+      dataSize: (fs.existsSync(DB_FILE) ? fs.statSync(DB_FILE).size : 0),
+      lastActivity: db.logs[0] ? db.logs[0].at : null
+    });
+  }
+
+  // ─── v4.0: القوالب (تعلم + إدارة + توليد وثائق) ───
+  if (req.method === 'GET' && p === '/api/templates') {
+    return json(db.templates.map(t => ({ id: t.id, name: t.name, fileName: t.fileName, size: t.size, fields: t.fields, source: t.source, createdAt: t.createdAt })));
+  }
+  if (req.method === 'POST' && p === '/api/templates/upload') {
+    const b = await readBody(req);
+    const fn = String(b.fileName || '');
+    const name = String(b.name || '').trim() || (fn ? fn.replace(/\.[^.]+$/, '') : 'قالب بدون اسم');
+    const mime = String(b.mime || '');
+    let text = String(b.text || '');
+    try {
+      if (!text && b.content) {
+        const buf = Buffer.from(b.content, 'base64');
+        if (/\.docx$/i.test(fn) || /wordprocessingml/.test(mime)) {
+          text = extractDocxText(buf);
+        } else if (/^image\//.test(mime)) {
+          if (!db.settings.kimiApiKey) return json({ error: 'اضبط مفتاح Kimi API أولاً لتحليل الصور ⚙️' }, 400);
+          text = await kimiTranscribe(db.settings.kimiApiKey, b.content, mime);
+        } else if (/\.(txt|md|markdown|html|htm|csv|json)$/i.test(fn) || /^(text\/|application\/(json|xml))/.test(mime)) {
+          text = buf.toString('utf8');
+        } else {
+          return json({ error: 'صيغة غير مدعومة للتعلم. المدعوم: DOCX، TXT، MD، HTML، CSV، صور (PNG/JPG)' }, 400);
+        }
+      }
+    } catch (e) { return json({ error: 'تعذر قراءة الملف: ' + e.message }, 400); }
+    text = String(text || '').trim();
+    if (text.length < 10) return json({ error: 'المحتوى قصير جداً أو فارغ — لم يتعلم شيئاً' }, 400);
+    if (text.length > 60000) text = text.slice(0, 60000);
+    const fields = detectFields(text);
+    const tpl = {
+      id: Date.now().toString() + Math.floor(Math.random() * 1000),
+      name: name.slice(0, 120), fileName: fn, size: text.length, fields, content: text,
+      source: b.text ? 'إدخال نصي' : 'ملف مرفوع', createdAt: new Date().toISOString()
+    };
+    db.templates.unshift(tpl); saveDB();
+    addLog('success', '📄 تعلّم قالباً جديداً: ' + tpl.name + (fields.length ? ' (' + fields.length + ' حقل)' : ''));
+    const { content, ...meta } = tpl;
+    return json({ ok: true, template: meta }, 201);
+  }
+  if (req.method === 'GET' && p.startsWith('/api/templates/') && p.endsWith('/content')) {
+    const id = p.split('/')[3];
+    const tpl = db.templates.find(x => x.id === id);
+    if (!tpl) return json({ error: 'القالب غير موجود' }, 404);
+    return json({ id: tpl.id, name: tpl.name, content: tpl.content, fields: tpl.fields });
+  }
+  if (req.method === 'DELETE' && p.startsWith('/api/templates/')) {
+    const id = p.split('/')[3];
+    const tpl = db.templates.find(x => x.id === id);
+    db.templates = db.templates.filter(x => x.id !== id);
+    saveDB();
+    if (tpl) addLog('warning', '🗑 حُذف قالب: ' + tpl.name);
+    return json({ ok: true });
+  }
+  if (req.method === 'POST' && p === '/api/templates/generate') {
+    const b = await readBody(req);
+    const tpl = db.templates.find(x => x.id === b.templateId);
+    if (!tpl) return json({ error: 'القالب غير موجود' }, 404);
+    const c = db.clients.find(x => x.id === b.clientId) || {};
+    const todayStr = new Date().toLocaleDateString('ar-MA', { timeZone: 'Africa/Casablanca' });
+    const values = { ...c, ...(b.values || {}) };
+    if (!values.date) values.date = todayStr;
+    if (!values.today) values.today = todayStr;
+    let body = escapeHtml(tpl.content);
+    for (const f of tpl.fields) {
+      const v = values[f] !== undefined && values[f] !== '' ? escapeHtml(String(values[f])) : '………………';
+      body = body.replace(new RegExp('\\{\\{\\s*' + f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\}\\}', 'g'), '<b style="color:#FF4D6D">' + v + '</b>');
+    }
+    const html = buildDocumentHTML(tpl.name, body);
+    addLog('success', '🖨 وثيقة مولّدة من قالب: ' + tpl.name + (c.fullName ? ' للعميل ' + c.fullName : ''));
+    return json({ ok: true, html });
+  }
+
   json({ error: 'Not found' }, 404);
 }
 function readBody(req) { return new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 30e6) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch (e) { r({}); } }); }); }
