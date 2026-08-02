@@ -1,4 +1,4 @@
-// Claw Office AI v3.3 — منطق الواجهة
+// Claw Office AI v4.0 — منطق الواجهة
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 
@@ -6,28 +6,35 @@ function toast(msg) {
   const t = document.createElement('div');
   t.className = 'toast'; t.textContent = msg;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2500);
+  setTimeout(() => t.remove(), 2600);
 }
-
-// ─── أمان: تهريب HTML لمنع حقن XSS ───
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function timeAgo(iso) {
+  if (!iso) return '—';
   const m = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
-  if (m < 1) return 'الآن'; if (m < 60) return `منذ ${m} دقيقة`;
-  const h = Math.floor(m / 60); if (h < 24) return `منذ ${h} ساعة`;
-  return `منذ ${Math.floor(h / 24)} يوم`;
+  if (m < 1) return 'الآن'; if (m < 60) return `منذ ${m}د`;
+  const h = Math.floor(m / 60); if (h < 24) return `منذ ${h}س`;
+  return `منذ ${Math.floor(h / 24)}ي`;
 }
-
+function fmtDur(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  if (h >= 24) return Math.floor(h / 24) + 'يوم';
+  if (h > 0) return h + 'س' + m + 'د';
+  return m + 'د';
+}
 async function api(path, method = 'GET', body) {
   const res = await fetch(path, {
     method, headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
   return res.json();
+}
+function readFile(f) {
+  return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.readAsDataURL(f); });
 }
 
 // ─── التنقل ───
@@ -37,38 +44,160 @@ function go(id) {
   if (!target) return;
   target.classList.add('active');
   $$('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.go === id));
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-  if (id === 'screen-client') loadClientScreen();
   if (id === 'screen-clients') loadClientsPage();
-  if (id === 'screen-settings') loadReminders();
+  if (id === 'screen-agenda') loadAgenda();
+  if (id === 'screen-training') loadTemplates();
+  if (id === 'screen-users') loadUsers();
+  if (id === 'screen-logs') loadLogs();
+  if (id === 'screen-dashboard') loadAgentStatus();
 }
 $$('[data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
 
-// ─── لوحة التحكم ───
-async function loadStats() {
+// ─── حالة الوكيل (بيانات حقيقية دقيقة) ───
+async function loadAgentStatus() {
   try {
-    const s = await api('/api/stats');
-    $('#learning-pct').textContent = s.learning + '%';
-    $('#kb-size').innerHTML = `${(s.dataSize / 1024).toFixed(1)} <small>كيلوبايت</small>`;
-    $('#msg-today').textContent = s.messagesToday.toLocaleString('ar-MA');
-    $('#active-users').textContent = s.activeUsers.toLocaleString('ar-MA');
-    const rc = $('#rep-clients'); if (rc) { rc.textContent = s.clients; $('#rep-tasks').textContent = s.pendingTasks; $('#rep-reminders').textContent = s.pendingReminders; }
+    const s = await api('/api/agent-status');
+    // مؤشر مركّب حقيقي: متوسط ما هو متوفر من (دقة OCR، نسبة إنجاز المهام، جاهزية الخدمات)
+    const parts = [];
+    if (s.ocrRate !== null) parts.push(s.ocrRate);
+    if (s.taskRate !== null) parts.push(s.taskRate);
+    parts.push((s.botRunning ? 1 : 0) * 100, (s.kimiConfigured ? 1 : 0) * 100);
+    const score = Math.round(parts.reduce((a, b) => a + b, 0) / parts.length);
+    $('#agent-pct').textContent = score + '%';
+    $('#agent-ring').style.setProperty('--pct', score + '%');
+    const svc = [];
+    svc.push(s.botRunning ? 'البوت يعمل 🟢' : 'البوت متوقف ⚪');
+    svc.push(s.kimiConfigured ? 'Kimi مضبوط 🟢' : 'Kimi غير مضبوط 🔴');
+    if (s.kimiLastError) svc.push('آخر خطأ Kimi: ' + s.kimiLastError.slice(0, 60));
+    else if (s.kimiLastOk) svc.push('آخر اتصال ناجح بـ Kimi ' + timeAgo(s.kimiLastOk));
+    $('#agent-summary').textContent = svc.join(' • ');
+    const hg = (id, val, cls) => { const el = $(id); el.querySelector('b').textContent = val; el.className = 'hg-cell ' + cls; };
+    hg('#hg-bot', s.botRunning ? 'يعمل' : 'متوقف', s.botRunning ? 'ok' : 'warn');
+    hg('#hg-kimi', s.kimiConfigured ? 'مضبوط' : 'مفقود', s.kimiConfigured ? 'ok' : 'bad');
+    hg('#hg-ocr', s.ocrRate !== null ? s.ocrRate + '%' : '—', s.ocrRate === null ? '' : s.ocrRate >= 80 ? 'ok' : 'warn');
+    hg('#hg-uptime', fmtDur(s.uptimeSec), 'ok');
+    $('#st-clients').textContent = s.clients;
+    $('#st-docs').textContent = s.docsProcessed;
+    $('#st-rems').textContent = s.remindersPending;
+    $('#st-tasks').textContent = s.tasksActive;
+    $('#st-msgs').textContent = s.messagesToday;
+    $('#st-size').textContent = (s.dataSize / 1024).toFixed(1) + 'KB';
+    $('#act-count').textContent = s.lastActivity ? 'آخر نشاط ' + timeAgo(s.lastActivity) : '';
   } catch (e) {}
 }
-$('#live-learning').addEventListener('change', e =>
-  toast(e.target.checked ? '⚡ التعلم المباشر مفعّل' : '⏸ التعلم المباشر معطّل'));
 
 async function loadActivity() {
   try {
     const logs = await api('/api/logs');
-    const dot = { error: 'red', success: 'green', warning: 'yellow', system: 'cyan' };
-    $('#recent-activity').innerHTML = logs.slice(0, 6).map(l =>
-      `<div class="list-item"><span class="dot ${dot[l.level] || 'cyan'}"></span><span class="grow">${esc(l.text)}</span><small>${timeAgo(l.at)}</small></div>`
-    ).join('') || '<p style="color:var(--muted);font-size:13px;font-weight:600">لا نشاط بعد</p>';
+    const dot = { error: 'red', success: 'green', warning: 'amber', system: 'navy' };
+    $('#recent-activity').innerHTML = logs.slice(0, 5).map(l =>
+      `<div class="row"><span class="dot ${dot[l.level] || 'navy'}"></span><span class="grow ellip" style="font-weight:700">${esc(l.text)}</span><small>${timeAgo(l.at)}</small></div>`
+    ).join('') || '<p class="muted small" style="font-weight:700;padding:10px 0">لا نشاط بعد</p>';
   } catch (e) {}
 }
 
-// ─── الدردشة (Kimi) ───
+// ─── العملاء (بطاقات محسّنة للهاتف) ───
+let allClients = [];
+const AV = ['avatar', 'avatar t2', 'avatar t3'];
+function clientCardHTML(c, i) {
+  const rows = [
+    ['🆔', c.nationalId], ['📞', c.phone], ['✉️', c.email], ['🎂', c.birthDate],
+    ['📍', c.address], ['📅', c.expiry]
+  ].filter(([, v]) => v);
+  return `
+  <div class="card client-card">
+    <div class="client-top">
+      <div class="${AV[i % 3]}" style="width:48px;height:48px">${esc((c.fullName || c.nationalId || '؟')[0].toUpperCase())}</div>
+      <div class="grow">
+        <b title="${esc(c.fullName || '')}">${esc(c.fullName || 'بدون اسم')}</b>
+        <small>${esc(c.docType || 'مستند')} • ${timeAgo(c.updatedAt)}</small>
+      </div>
+      <span class="badge ${c.verified ? 'green' : 'amber'}">${c.verified ? '✔ موثّق' : 'غير موثّق'}</span>
+    </div>
+    ${rows.length ? `<div class="client-rows">${rows.map(([k, v]) => `<div class="crow">${k}<span title="${esc(v)}">${esc(v)}</span></div>`).join('')}</div>` : ''}
+    ${c.notes ? `<small class="muted" style="font-weight:700">📝 ${esc(c.notes.slice(0, 80))}${c.notes.length > 80 ? '…' : ''}</small>` : ''}
+    <div class="client-actions">
+      <button class="btn small navy" onclick="editClient('${esc(c.id)}')">✏️ تعديل</button>
+      <button class="btn small" onclick="deleteClient('${esc(c.id)}')">🗑 حذف</button>
+    </div>
+  </div>`;
+}
+function renderClientsGrid() {
+  const q = ($('#client-search').value || '').toLowerCase();
+  const list = allClients.filter(c => !q || JSON.stringify(c).toLowerCase().includes(q));
+  $('#clients-grid').innerHTML = list.map(clientCardHTML).join('') ||
+    '<div class="empty"><div class="big">🧾</div>لا عملاء — امسح مستنداً 📷 أو أضف يدوياً ➕</div>';
+}
+async function loadClientsPage() {
+  try { allClients = await api('/api/clients'); renderClientsGrid(); } catch (e) {}
+}
+window.editClient = id => {
+  const c = allClients.find(x => x.id === id);
+  if (!c) return;
+  $('#ce-title').textContent = '✏️ تعديل: ' + (c.fullName || c.nationalId || 'عميل');
+  $('#ce-id').value = c.id;
+  for (const k of ['fullName','nationalId','phone','email','birthDate','address','docType','notes']) $('#ce-' + k).value = c[k] || '';
+  $('#client-edit-card').style.display = 'block';
+};
+window.deleteClient = async id => {
+  const c = allClients.find(x => x.id === id);
+  if (!confirm('حذف العميل "' + ((c && (c.fullName || c.nationalId)) || '') + '" نهائياً؟')) return;
+  const r = await api('/api/clients/' + encodeURIComponent(id), 'DELETE');
+  if (r.ok) { toast('🗑 تم حذف العميل'); loadClientsPage(); loadAgentStatus(); }
+  else toast('❌ فشل الحذف');
+};
+$('#client-add-btn').addEventListener('click', () => {
+  $('#ce-title').textContent = '➕ عميل جديد';
+  $('#ce-id').value = '';
+  for (const k of ['fullName','nationalId','phone','email','birthDate','address','docType','notes']) $('#ce-' + k).value = '';
+  $('#client-edit-card').style.display = 'block';
+});
+$('#ce-cancel').addEventListener('click', () => { $('#client-edit-card').style.display = 'none'; });
+$('#ce-save').addEventListener('click', async () => {
+  const id = $('#ce-id').value;
+  const body = {};
+  for (const k of ['fullName','nationalId','phone','email','birthDate','address','docType','notes']) body[k] = $('#ce-' + k).value.trim();
+  if (!body.fullName && !body.nationalId && !body.phone) { toast('⚠️ أدخل الاسم أو رقم التعريف'); return; }
+  const r = id
+    ? await api('/api/clients/update', 'POST', { id, ...body })
+    : await api('/api/clients', 'POST', body);
+  if (r.error) { toast('❌ ' + r.error); return; }
+  toast(id ? '✅ تم حفظ التعديلات' : '✅ أُنشئ العميل — 🔔 تذكير مفعّل');
+  $('#client-edit-card').style.display = 'none';
+  loadClientsPage(); loadAgentStatus(); loadActivity();
+});
+$('#client-search').addEventListener('input', renderClientsGrid);
+
+// ─── المستندات: رفع صورة → OCR ───
+$('#doc-drop').addEventListener('click', () => $('#doc-file').click());
+$('#doc-file').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (!/^image\//.test(f.type)) { toast('⚠️ هنا تُدرج الصور فقط — القوالب من صفحة التدريب'); e.target.value = ''; return; }
+  toast('⏳ جارٍ تحليل الصورة بالذكاء الاصطناعي...');
+  const b64 = await readFile(f);
+  try {
+    const r = await api('/api/ocr', 'POST', { image: b64, mime: f.type });
+    if (r.error) { toast('❌ ' + r.error); renderExtracted(null); return; }
+    renderExtracted(r.client);
+    toast((r.isNew ? '✅ ملف عميل جديد أُنشئ' : '🔄 تم تحديث العميل') + ' — 🔔 بعد ' + r.reminderHours + 'س');
+    loadActivity(); loadAgentStatus();
+  } catch (err) { toast('❌ خطأ في الاتصال'); }
+  e.target.value = '';
+});
+function renderExtracted(c) {
+  const box = $('#extracted-data');
+  if (!c) { box.innerHTML = '<p class="muted small" style="font-weight:700">تعذر الاستخراج — جرّب صورة أوضح</p>'; return; }
+  const rows = [
+    ['الاسم الكامل', c.fullName], ['رقم التعريف', c.nationalId], ['تاريخ الميلاد', c.birthDate],
+    ['مكان الازدياد', c.birthPlace], ['العنوان', c.address], ['الهاتف', c.phone],
+    ['البريد', c.email], ['صالحة إلى', c.expiry], ['نوع المستند', c.docType], ['ملاحظات', c.notes]
+  ].filter(([, v]) => v);
+  box.innerHTML = rows.map(([k, v]) =>
+    `<div class="row"><span class="muted small" style="width:92px;flex-shrink:0;font-weight:800">${k}</span><span class="grow ellip" style="font-weight:800;text-align:left" dir="auto">${esc(v)}</span></div>`
+  ).join('');
+}
+
+// ─── الدردشة ───
 $('#chat-send').addEventListener('click', sendChat);
 $('#chat-text').addEventListener('keydown', e => e.key === 'Enter' && sendChat());
 async function sendChat() {
@@ -87,208 +216,171 @@ async function sendChat() {
   box.scrollTop = box.scrollHeight;
 }
 
-// ─── مسح مستند (OCR) ───
-$('#upload-doc').addEventListener('click', () => $('#doc-file').click());
-$('#doc-file').addEventListener('change', async e => {
-  const f = e.target.files[0]; if (!f) return;
-  toast('⏳ جارٍ تحليل الصورة بالذكاء الاصطناعي...');
-  const b64 = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.readAsDataURL(f); });
+// ─── الملفات المعلقة والمواعيد (تذكيرات + مهام) ───
+let agendaTab = 'reminders';
+$$('#agenda-tabs .tab').forEach(t => t.addEventListener('click', () => {
+  $$('#agenda-tabs .tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active'); agendaTab = t.dataset.f; loadAgenda();
+}));
+async function loadAgenda() {
+  const box = $('#agenda-list');
   try {
-    const r = await api('/api/ocr', 'POST', { image: b64, mime: f.type });
-    if (r.error) { toast('❌ ' + r.error); renderExtracted(null); return; }
-    renderExtracted(r.client);
-    toast((r.isNew ? '✅ ملف عميل جديد أُنشئ' : '🔄 تم تحديث العميل') + ' — 🔔 تذكير بعد ' + r.reminderHours + ' ساعة');
-    loadActivity(); loadStats();
+    if (agendaTab === 'reminders') {
+      const rems = await api('/api/reminders');
+      const pend = rems.filter(r => !r.sent);
+      box.innerHTML = pend.map(r => {
+        const mins = Math.max(0, Math.round((r.at - Date.now()) / 60000));
+        const when = mins >= 60 ? Math.floor(mins / 60) + 'س' + (mins % 60) + 'د' : mins + 'د';
+        return `<div class="item-card">
+          <div class="ic" style="background:rgba(255,176,32,.15)">⏰</div>
+          <div class="grow"><b title="${esc(r.clientName)}">🧾 ${esc(r.clientName)}</b><small>تذكير بملف العميل — كل ${r.hours}س</small></div>
+          <span class="badge amber">بعد ${when}</span>
+        </div>`;
+      }).join('') || '<div class="empty"><div class="big">⏰</div>لا تذكيرات قادمة — أنشئ عميلاً لتوليد تذكير تلقائي</div>';
+    } else {
+      const tasks = await api('/api/tasks');
+      const act = tasks.filter(t => !t.done);
+      box.innerHTML = act.map(t => `<div class="item-card">
+          <div class="ic" style="background:rgba(14,173,154,.12)">✅</div>
+          <div class="grow"><b title="${esc(t.title)}">${esc(t.title)}</b><small>${esc(t.due || 'بدون موعد')} • ${esc(t.priority || '')}</small></div>
+          <button class="btn small teal" onclick="doneTask('${esc(t.id)}')">إنجاز</button>
+        </div>`).join('') || '<div class="empty"><div class="big">✅</div>لا مهام معلقة — أضفها عبر البوت: /addtask</div>';
+    }
+  } catch (e) {}
+}
+window.doneTask = async id => {
+  await api('/api/tasks/toggle', 'POST', { id });
+  toast('✅ أُنجزت المهمة'); loadAgenda(); loadAgentStatus();
+};
+
+// ─── التدريب والقوالب ───
+$('#tpl-drop').addEventListener('click', () => $('#tpl-file').click());
+$('#tpl-file').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  toast('⏳ جارٍ قراءة الملف والتعلم منه...');
+  const b64 = await readFile(f);
+  try {
+    const r = await api('/api/templates/upload', 'POST', { fileName: f.name, mime: f.type, content: b64 });
+    if (r.error) { toast('❌ ' + r.error); return; }
+    toast('🧠 تعلّم قالباً: ' + r.template.name + (r.template.fields.length ? ' (' + r.template.fields.length + ' حقل)' : ''));
+    loadTemplates(); loadActivity();
   } catch (err) { toast('❌ خطأ في الاتصال'); }
   e.target.value = '';
 });
-function renderExtracted(c) {
-  const box = $('#extracted-data');
-  if (!c) { box.innerHTML = '<p style="color:var(--muted);font-size:13px;font-weight:600">تعذر الاستخراج — جرّب صورة أوضح</p>'; return; }
-  const rows = [
-    ['الاسم الكامل', c.fullName], ['رقم التعريف', c.nationalId], ['تاريخ الميلاد', c.birthDate],
-    ['مكان الازدياد', c.birthPlace], ['العنوان', c.address], ['الهاتف', c.phone],
-    ['البريد', c.email], ['صالحة إلى', c.expiry], ['نوع المستند', c.docType], ['ملاحظات', c.notes]
-  ].filter(([, v]) => v);
-  box.innerHTML = rows.map(([k, v]) => `<div class="extracted"><span>${k}</span><b class="hl">${esc(v)}</b></div>`).join('');
-}
-
-// ─── شاشة العميل ───
-async function loadClientScreen() {
-  try {
-    const clients = await api('/api/clients');
-    const c = clients[0];
-    if (!c) {
-      $('#client-name').textContent = 'لا عملاء بعد';
-      $('#client-avatar').textContent = '؟';
-      $('#client-grid').innerHTML = '';
-      $('#client-docs').innerHTML = '';
-      $('#clients-list').innerHTML = '<p style="color:var(--muted)">امسح مستندًا لإنشاء أول ملف 📷</p>';
-      return;
-    }
-    $('#client-name').textContent = c.fullName || c.nationalId || 'عميل';
-    $('#client-avatar').textContent = (c.fullName || '؟')[0];
-    const cells = [
-      ['رقم التعريف', c.nationalId], ['الاسم الكامل', c.fullName], ['تاريخ الميلاد', c.birthDate],
-      ['مكان الازدياد', c.birthPlace], ['الهاتف', c.phone], ['البريد', c.email],
-      ['العنوان', c.address], ['الأب', c.father], ['الأم', c.mother], ['صالحة إلى', c.expiry]
-    ].filter(([, v]) => v);
-    $('#client-grid').innerHTML = cells.map(([k, v]) => `<div class="data-cell"><small>${k}</small><b dir="auto">${esc(v)}</b></div>`).join('');
-    $('#client-docs').innerHTML = `<div class="doc-card"><span class="badge green">موثّق</span><div class="big-icon">📄</div><small>${esc(c.docType || 'مستند')}</small></div>`;
-    $('#clients-list').innerHTML = clients.slice(0, 8).map(x =>
-      `<div class="file-row"><div class="file-icon">👤</div><span class="grow">${esc(x.fullName || 'بدون اسم')}</span><span class="badge ${x.verified ? 'green' : 'orange'}">${esc(x.nationalId || '')}</span></div>`
-    ).join('');
-  } catch (e) {}
-}
-
-// ─── صفحة العملاء (بطاقات + تعديل/حذف/إضافة) ───
-let allClients = [];
-function clientCardHTML(c) {
-  const rows = [
-    ['🆔', c.nationalId], ['📞', c.phone], ['✉️', c.email],
-    ['🎂', c.birthDate], ['📍', c.address], ['📅 صالحة إلى', c.expiry]
-  ].filter(([, v]) => v);
-  return `
-  <div class="card client-card">
-    <div class="client-header">
-      <div class="avatar">${esc((c.fullName || c.nationalId || '؟')[0].toUpperCase())}</div>
-      <div style="flex:1;min-width:0">
-        <b>${esc(c.fullName || 'بدون اسم')}</b>
-        <span class="badge ${c.verified ? 'green' : 'orange'}">${c.verified ? '✔ موثّق' : 'غير موثّق'}</span>
-        <small style="color:var(--muted);display:block;margin-top:2px">${esc(c.docType || 'مستند')}</small>
-      </div>
-    </div>
-    ${rows.map(([k, v]) => `<div class="extracted"><span>${k}</span><b class="hl">${esc(v)}</b></div>`).join('')}
-    ${c.notes ? `<div class="client-meta">📝 ${esc(c.notes)}</div>` : ''}
-    <div class="actions">
-      <button class="btn small neon" onclick="editClient('${esc(c.id)}')">✏️ تعديل</button>
-      <button class="btn small" onclick="deleteClient('${esc(c.id)}')">🗑 حذف</button>
-    </div>
-  </div>`;
-}
-function renderClientsGrid() {
-  const q = ($('#client-search').value || '').toLowerCase();
-  const list = allClients.filter(c => !q || JSON.stringify(c).toLowerCase().includes(q));
-  $('#clients-grid').innerHTML = list.map(clientCardHTML).join('') ||
-    '<div class="card center" style="color:var(--muted)">لا عملاء — امسح مستنداً 📷 أو أضف عميلاً يدوياً ➕</div>';
-}
-async function loadClientsPage() {
-  try {
-    allClients = await api('/api/clients');
-    renderClientsGrid();
-  } catch (e) {}
-}
-window.editClient = id => {
-  const c = allClients.find(x => x.id === id);
-  if (!c) return;
-  $('#ce-title').textContent = '✏️ تعديل: ' + (c.fullName || c.nationalId || 'عميل');
-  $('#ce-id').value = c.id;
-  for (const k of ['fullName','nationalId','phone','email','birthDate','address','docType','notes']) $('#ce-' + k).value = c[k] || '';
-  $('#client-edit-card').style.display = 'block';
-  $('#client-edit-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
-};
-window.deleteClient = async id => {
-  const c = allClients.find(x => x.id === id);
-  if (!confirm('حذف العميل "' + ((c && (c.fullName || c.nationalId)) || '') + '" نهائياً؟ ستُحذف تذكيراته أيضاً.')) return;
-  const r = await api('/api/clients/' + encodeURIComponent(id), 'DELETE');
-  if (r.ok) { toast('🗑 تم حذف العميل'); loadClientsPage(); loadStats(); loadLogs(); }
-  else toast('❌ فشل الحذف');
-};
-$('#client-add-btn').addEventListener('click', () => {
-  $('#ce-title').textContent = '➕ عميل جديد';
-  $('#ce-id').value = '';
-  for (const k of ['fullName','nationalId','phone','email','birthDate','address','docType','notes']) $('#ce-' + k).value = '';
-  $('#client-edit-card').style.display = 'block';
-  $('#client-edit-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+$('#tpl-save-text').addEventListener('click', async () => {
+  const name = $('#tpl-name').value.trim(), text = $('#tpl-text').value.trim();
+  if (!text) { toast('⚠️ الصق نص القالب أولاً'); return; }
+  const r = await api('/api/templates/upload', 'POST', { name, text });
+  if (r.error) { toast('❌ ' + r.error); return; }
+  toast('🧠 تعلّم قالباً: ' + r.template.name);
+  $('#tpl-name').value = ''; $('#tpl-text').value = '';
+  loadTemplates(); loadActivity();
 });
-$('#ce-cancel').addEventListener('click', () => { $('#client-edit-card').style.display = 'none'; });
-$('#ce-save').addEventListener('click', async () => {
-  const id = $('#ce-id').value;
-  const body = {};
-  for (const k of ['fullName','nationalId','phone','email','birthDate','address','docType','notes']) body[k] = $('#ce-' + k).value.trim();
-  if (!body.fullName && !body.nationalId && !body.phone) { toast('⚠️ أدخل الاسم أو رقم التعريف على الأقل'); return; }
-  if (id) {
-    const r = await api('/api/clients/update', 'POST', { id, ...body });
-    if (r.error) { toast('❌ ' + r.error); return; }
-    toast('✅ تم حفظ التعديلات');
-  } else {
-    const r = await api('/api/clients', 'POST', body);
-    if (r.error) { toast('❌ ' + r.error); return; }
-    toast('✅ أُنشئ العميل — 🔔 تذكير تلقائي مفعّل');
-  }
-  $('#client-edit-card').style.display = 'none';
-  loadClientsPage(); loadStats(); loadLogs(); loadActivity();
-});
-$('#client-search').addEventListener('input', renderClientsGrid);
-
-// ─── المهام ───
-async function loadTasks() {
+let allTemplates = [];
+async function loadTemplates() {
   try {
-    const tasks = await api('/api/tasks');
-    $('#tasks-list').innerHTML = tasks.map(t => `
-      <div class="task-card ${t.done ? 'READY' : 'PROCESSING'}">
-        <div class="task-head">
-          <div><b>${esc(t.title)}</b><br><small style="color:var(--muted)">📅 ${esc(t.due || 'بدون موعد')} • ${esc(t.priority || '')}</small></div>
-          <span class="status ${t.done ? 'READY' : 'PROCESSING'}">${t.done ? 'منجزة ✅' : 'نشطة'}</span>
+    allTemplates = await api('/api/templates');
+    $('#tpl-count').textContent = allTemplates.length + ' قالب';
+    $('#templates-list').innerHTML = allTemplates.map(t => `
+      <div class="tpl-card">
+        <div class="top">
+          <div class="avatar t2" style="width:42px;height:42px;font-size:18px">📄</div>
+          <div class="grow" style="flex:1;min-width:0">
+            <b class="ellip" style="display:block;font-size:13.5px;font-weight:900">${esc(t.name)}</b>
+            <small class="muted" style="font-weight:700">${esc(t.source)} • ${(t.size / 1024).toFixed(1)}KB • ${timeAgo(t.createdAt)}</small>
+          </div>
         </div>
-      </div>`).join('') || '<div class="card center" style="color:var(--muted)">لا مهام — أضفها عبر البوت: /addtask</div>';
+        ${t.fields.length ? `<div class="tpl-fields">${t.fields.map(f => `<span class="tpl-chip">${esc(f)}</span>`).join('')}</div>` : ''}
+        <div class="tpl-actions">
+          <button class="btn small coral" onclick="openGenerate('${esc(t.id)}')">🖨 إنشاء وثيقة</button>
+          <button class="btn small" onclick="deleteTemplate('${esc(t.id)}')">🗑</button>
+        </div>
+      </div>`).join('') || '<div class="empty"><div class="big">🧠</div>لا قوالب بعد — ارفع نموذجاً أو الصق نصاً ليتعلم منه</div>';
   } catch (e) {}
 }
+window.deleteTemplate = async id => {
+  if (!confirm('حذف هذا القالب نهائياً؟')) return;
+  await api('/api/templates/' + encodeURIComponent(id), 'DELETE');
+  toast('🗑 حُذف القالب'); loadTemplates();
+};
 
-// ─── السجلات ───
-async function loadLogs(filter = 'all') {
-  try {
-    const allLogs = await api('/api/logs');
-    const list = filter === 'all' ? allLogs : allLogs.filter(l => l.level.toUpperCase().startsWith(filter.slice(0, 4)));
-    const html = list.map(l =>
-      `<div class="log-entry ${esc(l.level)}">[${esc(l.level)}] ${esc(l.text)} <small>• ${new Date(l.at).toLocaleTimeString('ar-MA')}</small></div>`
-    ).join('') || '<div class="log-entry INFO">لا توجد سجلات</div>';
-    $('#logs-list').innerHTML = html;
-    const sl = $('#status-logs');
-    if (sl) sl.innerHTML = allLogs.slice(0, 5).map(l =>
-      `<div class="log-entry ${esc(l.level)}">[${esc(l.level)}] ${esc(l.text)}</div>`).join('');
-  } catch (e) {}
-}
-$$('#log-filters .tab').forEach(t => t.addEventListener('click', () => {
-  $$('#log-filters .tab').forEach(x => x.classList.remove('active'));
-  t.classList.add('active'); loadLogs(t.dataset.f);
-}));
+// ─── توليد وثيقة من قالب ───
+const FIELD_LABELS = { fullName: 'الاسم الكامل', nationalId: 'رقم التعريف', phone: 'الهاتف', email: 'البريد', address: 'العنوان', birthDate: 'تاريخ الميلاد', birthPlace: 'مكان الازدياد', docType: 'نوع المستند', date: 'التاريخ', today: 'التاريخ' };
+let genTemplateId = null;
+window.openGenerate = async id => {
+  genTemplateId = id;
+  const t = allTemplates.find(x => x.id === id);
+  if (!t) return;
+  $('#gen-title').textContent = '🖨 إنشاء: ' + t.name;
+  const sel = $('#gen-client');
+  sel.innerHTML = '<option value="">— بدون عميل —</option>' +
+    allClients.map(c => `<option value="${esc(c.id)}">${esc(c.fullName || c.nationalId || 'عميل')}</option>`).join('');
+  $('#gen-fields').innerHTML = t.fields.map(f =>
+    `<label class="flabel">${esc(FIELD_LABELS[f] || f)} <span class="muted">(${esc(f)})</span></label>
+     <input class="field gen-val" data-f="${esc(f)}" placeholder="${esc(FIELD_LABELS[f] || f)}">`
+  ).join('') || '<p class="muted small" style="font-weight:700">هذا القالب بلا حقول — سيُولَّد كما هو.</p>';
+  sel.onchange = () => {
+    const c = allClients.find(x => x.id === sel.value) || {};
+    $$('.gen-val').forEach(inp => { inp.value = c[inp.dataset.f] || ''; });
+  };
+  $('#gen-overlay').style.display = 'flex';
+};
+$('#gen-cancel').addEventListener('click', () => { $('#gen-overlay').style.display = 'none'; });
+$('#gen-run').addEventListener('click', async () => {
+  const values = {};
+  $$('.gen-val').forEach(inp => { if (inp.value.trim()) values[inp.dataset.f] = inp.value.trim(); });
+  toast('⏳ جارٍ توليد الوثيقة...');
+  const r = await api('/api/templates/generate', 'POST', {
+    templateId: genTemplateId, clientId: $('#gen-client').value || undefined, values
+  });
+  if (r.error) { toast('❌ ' + r.error); return; }
+  $('#gen-overlay').style.display = 'none';
+  const blob = new Blob([r.html], { type: 'text/html;charset=utf-8' });
+  window.open(URL.createObjectURL(blob), '_blank');
+  toast('🖨 فُتحت الوثيقة — اضغط "طباعة / حفظ كـ PDF"');
+  loadActivity();
+});
 
 // ─── المستخدمون ───
-let usersFilter = 'all';
-$$('#user-tabs .tab').forEach(t => t.addEventListener('click', () => {
-  $$('#user-tabs .tab').forEach(x => x.classList.remove('active'));
-  t.classList.add('active'); usersFilter = t.dataset.f; loadUsers();
-}));
-function userCardHTML(u) {
-  return `
-  <div class="user-card ${u.blocked ? 'blocked' : ''}">
-    <div class="avatar">${esc((u.username || '?')[0].toUpperCase())}</div>
-    <div class="user-info">
-      <b>${esc(u.username || '')}</b> <span class="badge ${u.blocked ? 'red' : u.authed ? 'green' : 'orange'}">${u.blocked ? 'محظور' : u.authed ? 'مصرّح 🔓' : 'بانتظار الرمز 🔒'}</span>
-      <small>المعرف: ${esc(u.id)} • آخر نشاط: ${timeAgo(u.lastSeen)}</small>
-    </div>
-    <button class="btn small ${u.blocked ? 'neon' : ''}" onclick="toggleBlock(${u.id})">${u.blocked ? 'إلغاء الحظر' : 'حظر'}</button>
-  </div>`;
-}
 async function loadUsers() {
   try {
     const users = await api('/api/users');
     const q = ($('#user-search').value || '').toLowerCase();
-    const filtered = users
-      .filter(u => usersFilter === 'all' || u.blocked)
-      .filter(u => !q || (u.username || '').toLowerCase().includes(q));
-    $('#users-list').innerHTML = filtered.map(userCardHTML).join('') ||
-      '<div class="card center" style="color:var(--muted)">لا يوجد مستخدمون بعد — فعّلوا البوت برمز الأمان</div>';
-    $('#users-mini').innerHTML = users.slice(0, 3).map(userCardHTML).join('');
+    const list = users.filter(u => !q || (u.username || '').toLowerCase().includes(q));
+    $('#users-list').innerHTML = list.map((u, i) => `
+      <div class="item-card">
+        <div class="${AV[i % 3]}" style="width:42px;height:42px">${esc((u.username || '?')[0].toUpperCase())}</div>
+        <div class="grow">
+          <b>${esc(u.username || '')}</b>
+          <small>ID: ${esc(u.id)} • ${timeAgo(u.lastSeen)}</small>
+        </div>
+        <span class="badge ${u.blocked ? 'red' : u.authed ? 'green' : 'amber'}">${u.blocked ? 'محظور' : u.authed ? 'مصرّح' : 'ينتظر'}</span>
+        <button class="btn small ${u.blocked ? 'teal' : ''}" onclick="toggleBlock(${u.id})">${u.blocked ? 'إلغاء الحظر' : 'حظر'}</button>
+      </div>`).join('') || '<div class="empty"><div class="big">🛡</div>لا مستخدمون بعد — فعّلوا البوت برمز الأمان</div>';
   } catch (e) {}
 }
 window.toggleBlock = async id => {
   const u = await api('/api/users/toggle-block', 'POST', { id });
-  toast(u.blocked ? `🚫 تم حظر ${u.username}` : `✅ تم إلغاء حظر ${u.username}`);
-  loadUsers(); loadLogs();
+  toast(u.blocked ? `🚫 تم حظر ${u.username}` : `✅ أُلغي حظر ${u.username}`);
+  loadUsers();
 };
 $('#user-search').addEventListener('input', loadUsers);
+
+// ─── السجلات ───
+let logFilter = 'all';
+$$('#log-filters .tab').forEach(t => t.addEventListener('click', () => {
+  $$('#log-filters .tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active'); logFilter = t.dataset.f; loadLogs();
+}));
+async function loadLogs() {
+  try {
+    const all = await api('/api/logs');
+    const list = logFilter === 'all' ? all : all.filter(l => l.level === logFilter);
+    $('#logs-list').innerHTML = list.map(l =>
+      `<div class="log-entry ${esc(l.level)}">${esc(l.text)} <small>• ${timeAgo(l.at)}</small></div>`
+    ).join('') || '<div class="empty"><div class="big">📊</div>لا سجلات</div>';
+  } catch (e) {}
+}
 
 // ─── البحث العميق ───
 let searchTimer;
@@ -298,25 +390,15 @@ $('#deep-search').addEventListener('input', e => {
     const q = e.target.value.trim();
     if (!q) { $('#search-results').innerHTML = ''; return; }
     const results = await api('/api/search', 'POST', { q });
-    const hl = s => esc(s || '').replace(new RegExp(escRe(q), 'gi'), m => `<mark>${m}</mark>`);
+    const hl = s => esc(s || '').replace(new RegExp(escRe(q), 'gi'), m => `<b style="color:var(--coral)">${m}</b>`);
     $('#search-results').innerHTML = (results.results || []).map(r => `
-      <div class="result-card">
-        <b>${hl(r.name)}</b> <span class="badge cyan">${r.type}</span>
-        <small>${hl(r.detail)}</small>
-      </div>`).join('') || '<div class="card center" style="color:var(--muted)">لا توجد نتائج</div>';
+      <div class="item-card">
+        <div class="ic" style="background:rgba(30,34,71,.08)">🔎</div>
+        <div class="grow"><b>${hl(r.name)}</b><small>${hl(r.detail)}</small></div>
+        <span class="badge navy">${r.type}</span>
+      </div>`).join('') || '<div class="empty"><div class="big">🔍</div>لا نتائج</div>';
   }, 350);
 });
-
-// ─── الرسم البياني ───
-(function drawChart() {
-  const el = $('#bar-chart'); if (!el) return;
-  const data = [['W1', 55], ['W2', 62], ['W3', 80], ['W4', 95]];
-  el.innerHTML = data.map(([w, v]) =>
-    `<div class="col-wrap"><div class="col" style="height:${v}%"></div><small>${w}</small></div>`).join('');
-})();
-
-// ─── التدريب ───
-$('#conf-range')?.addEventListener('input', e => $('#conf-val').textContent = e.target.value + '%');
 
 // ─── الإعدادات ───
 async function saveSettings() {
@@ -338,99 +420,70 @@ async function loadSettings() {
 }
 function setBadge(sel, connected) {
   const b = $(sel);
-  b.className = 'badge ' + (connected ? 'green' : 'orange');
+  b.className = 'badge ' + (connected ? 'green' : 'amber');
   b.textContent = connected ? 'متصل' : 'غير متصل';
 }
 function showStatus(el, ok, msg) {
-  el.innerHTML = `<span class="badge ${ok ? 'green' : 'red'}" style="font-size:12px">${ok ? '✅' : '❌'} ${msg}</span>`;
+  el.innerHTML = `<span class="badge ${ok ? 'green' : 'red'}" style="font-size:11px">${ok ? '✅' : '❌'} ${esc(msg)}</span>`;
 }
-
-$('#cf-deploy')?.addEventListener('click', () => toast('☁ النشر يتم يدوياً من Termux'));
-$('#gh-sync')?.addEventListener('click', () => toast('⌥ المزامنة عبر git pull في Termux'));
-
-// ─── رمز الأمان ───
 $('#token-copy').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText($('#access-token').value); toast('📋 تم نسخ الرمز — أرسله للبوت: /auth ' + $('#access-token').value); }
+  try { await navigator.clipboard.writeText($('#access-token').value); toast('📋 نُسخ — أرسله للبوت: /auth ' + $('#access-token').value); }
   catch (e) { $('#access-token').select(); document.execCommand('copy'); toast('📋 تم النسخ'); }
 });
 $('#token-regen').addEventListener('click', async () => {
-  if (!confirm('توليد رمز جديد سيلغي صلاحية كل مستخدمي البوت الحاليين. متابعة؟')) return;
+  if (!confirm('رمز جديد سيلغي صلاحية كل مستخدمي البوت. متابعة؟')) return;
   const r = await api('/api/token/regen', 'POST', {});
-  if (r.ok) { $('#access-token').value = r.token; toast('🔐 رمز جديد: ' + r.token); loadLogs(); }
+  if (r.ok) { $('#access-token').value = r.token; toast('🔐 رمز جديد: ' + r.token); }
 });
-
-// ─── مدة التذكير ───
 $('#rem-range').addEventListener('input', e => $('#rem-val').textContent = e.target.value + ' ساعة');
 $('#rem-save').addEventListener('click', async () => {
   await api('/api/settings', 'POST', { reminderHours: parseFloat($('#rem-range').value) });
-  toast('💾 تم حفظ مدة التذكير: ' + $('#rem-range').value + ' ساعة'); loadReminders(); loadLogs();
+  toast('💾 حُفظت مدة التذكير: ' + $('#rem-range').value + 'س');
 });
-async function loadReminders() {
-  try {
-    const rems = await api('/api/reminders');
-    const pend = rems.filter(r => !r.sent);
-    $('#reminders-list').innerHTML = pend.map(r =>
-      `<div class="list-item"><span class="dot yellow"></span><span class="grow">🧾 ${esc(r.clientName)}</span><small>بعد ${Math.max(1, Math.round((r.at - Date.now()) / 60000))} دقيقة</small></div>`
-    ).join('') || '<p style="color:var(--muted);font-size:13px;font-weight:600">لا تذكيرات قادمة</p>';
-  } catch (e) {}
-}
-
-// ─── تلغرام ───
 $('#tg-test').addEventListener('click', async () => {
   await saveSettings();
   const st = $('#tg-status'); showStatus(st, true, 'جارٍ الاختبار...');
   const r = await api('/api/telegram/test', 'POST', {});
-  showStatus(st, r.ok, r.ok ? `متصل بالبوت @${r.bot.username}` : `خطأ: ${r.error}`);
+  showStatus(st, r.ok, r.ok ? `متصل @${r.bot.username}` : `خطأ: ${r.error}`);
   setBadge('#tg-badge', r.ok);
-  toast(r.ok ? `✈️ متصل بـ @${r.bot.username}` : `❌ ${r.error}`);
-  loadLogs();
 });
-$('#tg-send').addEventListener('click', async () => {
-  const r = await api('/api/telegram/send', 'POST', { chatId: $('#tg-chatid').value, text: $('#tg-msg').value });
-  toast(r.ok ? '📨 تم إرسال الرسالة بنجاح' : `❌ ${r.error}`);
-  if (r.ok) $('#tg-msg').value = '';
-  loadLogs();
+$('#tg-bot-start').addEventListener('click', async () => {
+  await saveSettings();
+  const r = await api('/api/telegram/bot', 'POST', { action: 'start' });
+  toast(r.ok ? '🤖 البوت يعمل!' : `❌ ${r.error}`);
+  refreshBotStatus();
 });
-$('#tg-updates').addEventListener('click', async () => {
-  const r = await api('/api/telegram/updates');
-  if (!r.ok) { toast(`❌ ${r.error}`); loadLogs(); return; }
-  $('#tg-messages').innerHTML = r.messages.map(m => `
-    <div class="list-item"><span class="dot cyan"></span>
-      <span class="grow"><b>@${esc(m.from)}</b> (${esc(m.chatId)})<br><small>${esc(m.date)}</small></span>
-    </div>`).join('') || '<small style="color:var(--muted)">لا رسائل — أرسل للبوت أولاً</small>';
-  loadLogs();
+$('#tg-bot-stop').addEventListener('click', async () => {
+  await api('/api/telegram/bot', 'POST', { action: 'stop' });
+  toast('⏹ توقف البوت'); refreshBotStatus();
 });
 async function refreshBotStatus() {
   try {
     const r = await api('/api/telegram/bot-status');
     $('#tg-bot-status').innerHTML = r.running
-      ? '<span class="badge green">🟢 البوت يعمل (Long Polling سريع ⚡)</span>'
-      : '<span class="badge orange">⚪ البوت متوقف</span>';
+      ? '<span class="badge green">🟢 البوت يعمل</span>'
+      : '<span class="badge amber">⚪ البوت متوقف</span>';
   } catch (e) {}
 }
-$('#tg-bot-start').addEventListener('click', async () => {
-  await saveSettings();
-  const r = await api('/api/telegram/bot', 'POST', { action: 'start' });
-  toast(r.ok ? '🤖 البوت يعمل! فعّل وصولك برمز الأمان' : `❌ ${r.error}`);
-  refreshBotStatus(); loadLogs();
-});
-$('#tg-bot-stop').addEventListener('click', async () => {
-  await api('/api/telegram/bot', 'POST', { action: 'stop' });
-  toast('⏹ تم إيقاف البوت');
-  refreshBotStatus(); loadLogs();
-});
-
-// ─── Kimi ───
 $('#kimi-test').addEventListener('click', async () => {
   await saveSettings();
   const st = $('#kimi-status'); showStatus(st, true, 'جارٍ الاختبار...');
   const r = await api('/api/kimi/test', 'POST', {});
-  showStatus(st, !!r.ok, r.ok ? 'متصل — تم إرسال تأكيد إلى بوت تلغرام 🌙' : `خطأ: ${r.error || 'فشل'}`);
+  showStatus(st, !!r.ok, r.ok ? 'متصل — تأكيد أُرسل إلى تلغرام 🌙' : `خطأ: ${r.error || 'فشل'}`);
   setBadge('#kimi-badge', !!r.ok);
-  toast(r.ok ? '🌙 Kimi API متصل — تحقق من بوت تلغرام' : `❌ ${r.error || 'فشل الاتصال'}`);
-  loadLogs();
+  toast(r.ok ? '🌙 Kimi متصل — تحقق من البوت' : `❌ ${r.error || 'فشل'}`);
 });
 
+// ─── حالة الاتصال الحية ───
+async function pingHealth() {
+  const el = $('#live-status');
+  try {
+    const r = await api('/api/health');
+    el.className = 'live-dot' + (r.ok ? '' : ' off');
+    el.innerHTML = '<i></i> ' + (r.ok ? 'متصل' : 'مشكلة');
+  } catch (e) { el.className = 'live-dot off'; el.innerHTML = '<i></i> منقطع'; }
+}
+
 // ─── تشغيل أولي ───
-loadStats(); loadTasks(); loadUsers(); loadLogs(); loadSettings(); refreshBotStatus(); loadActivity();
-setInterval(() => { loadLogs(); loadActivity(); }, 10000);
+loadAgentStatus(); loadActivity(); loadSettings(); refreshBotStatus(); pingHealth();
+setInterval(() => { loadAgentStatus(); loadActivity(); pingHealth(); }, 12000);
